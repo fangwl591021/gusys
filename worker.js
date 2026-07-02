@@ -19,9 +19,17 @@ export default {
 
     try {
       if (url.pathname === "/") return renderHome(env);
+      if (url.pathname === "/admin") return renderAdminPage(env);
       if (url.pathname === "/hub-test") return handleHubTest(env);
       if (url.pathname === "/line-webhook") return handleLineWebhook(request, env, ctx);
       if (url.pathname === "/sales/invite") return renderSalesInvitePage(request, env);
+      if (url.pathname.startsWith("/api/admin/webhook") && request.method === "GET") return listAdminWebhookEvents(request, env);
+      if (url.pathname === "/api/admin/summary" && request.method === "GET") return adminSummary(request, env);
+      if (url.pathname === "/api/admin/customers" && request.method === "GET") return listAdminCustomers(request, env);
+      if (url.pathname === "/api/admin/line-messages" && request.method === "GET") return listAdminLineMessages(request, env);
+      if ((url.pathname === "/api/admin/webhook-events" || url.pathname === "/api/admin/webhooks") && request.method === "GET") return listAdminWebhookEvents(request, env);
+      if (url.pathname === "/api/products" && request.method === "GET") return listProducts(request, env);
+      if (url.pathname === "/api/products" && request.method === "POST") return createProduct(request, env);
       if (url.pathname === "/api/sales/reps" && request.method === "POST") return createSalesRep(request, env);
       if (url.pathname === "/api/sales/reps" && request.method === "GET") return listSalesReps(env);
       if (url.pathname === "/api/sales/bind" && request.method === "POST") return bindCustomerToSalesRep(request, env);
@@ -45,6 +53,12 @@ export default {
   },
 };
 
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
 async function handleLineWebhook(request, env, ctx) {
   if (request.method === "GET") {
     return new Response("Gusys LINE webhook endpoint", { status: 200, headers: TEXT_HEADERS });
@@ -374,6 +388,155 @@ function lineEventText(event) {
   return `[${event.type || "event"}]`;
 }
 
+async function adminSummary(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const [sales, customers, products, messages, webhooks, highRisk] = await Promise.all([
+    countRows(env, "sales_reps", "status = 'active'"),
+    countRows(env, "customers", "status = 'active'"),
+    countRows(env, "products", "status = 'active'"),
+    countRows(env, "line_messages", "message_text <> ''"),
+    countRows(env, "webhook_events", "source = 'mother'"),
+    countRows(env, "ai_monitor_insights", "risk_level = 'high'"),
+  ]);
+  const latestMother = await env.DB.prepare(`
+    SELECT message_text AS messageText, mother_status AS motherStatus, raw_json AS rawJson, created_at AS createdAt
+    FROM webhook_events
+    WHERE source = 'mother'
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).first();
+  const latestMessage = await env.DB.prepare(`
+    SELECT message_text AS messageText, sender_id AS senderId, created_at AS createdAt
+    FROM line_messages
+    WHERE message_text <> ''
+    ORDER BY created_at DESC, inserted_at DESC
+    LIMIT 1
+  `).first();
+  return json({ ok: true, data: { sales, customers, products, messages, webhooks, highRisk, latestMother, latestMessage } });
+}
+
+async function listAdminCustomers(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const url = new URL(request.url);
+  const limit = readLimit(url, 200);
+  const { results } = await env.DB.prepare(`
+    SELECT c.id, c.line_user_id AS lineUserId, c.display_name AS displayName,
+           c.phone, c.address, c.status, c.first_seen_at AS firstSeenAt,
+           sr.sales_code AS salesCode, sr.name AS salesName, b.bound_at AS boundAt
+    FROM customers c
+    LEFT JOIN customer_sales_bindings b ON b.customer_id = c.id AND b.active = 1
+    LEFT JOIN sales_reps sr ON sr.id = b.sales_rep_id
+    ORDER BY c.updated_at DESC, c.created_at DESC
+    LIMIT ?
+  `).bind(limit).all();
+  return json({ ok: true, data: results || [] });
+}
+
+async function listAdminLineMessages(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const url = new URL(request.url);
+  const limit = readLimit(url, 120);
+  const { results } = await env.DB.prepare(`
+    SELECT id, thread_id AS threadId, sender_id AS senderId, sender_name AS senderName,
+           message_type AS messageType, message_text AS messageText, created_at AS createdAt, inserted_at AS insertedAt
+    FROM line_messages
+    WHERE message_text <> ''
+    ORDER BY created_at DESC, inserted_at DESC
+    LIMIT ?
+  `).bind(limit).all();
+  return json({ ok: true, data: results || [] });
+}
+
+async function listAdminWebhookEvents(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const url = new URL(request.url);
+  const limit = readLimit(url, 120);
+  const source = String(url.searchParams.get("source") || "").trim();
+  const where = source ? "WHERE source = ?" : "";
+  const stmt = env.DB.prepare(`
+    SELECT id, source, event_type AS eventType, line_user_id AS lineUserId,
+           message_text AS messageText, mother_status AS motherStatus,
+           handled_by_gusys AS handledByGusys, raw_json AS rawJson, created_at AS createdAt
+    FROM webhook_events
+    ${where}
+    ORDER BY created_at DESC
+    LIMIT ?
+  `);
+  const { results } = source ? await stmt.bind(source, limit).all() : await stmt.bind(limit).all();
+  return json({ ok: true, data: (results || []).map(item => ({ ...item, summary: summarizeWebhookRaw(item.rawJson) })) });
+}
+
+async function listProducts(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const url = new URL(request.url);
+  const limit = readLimit(url, 200);
+  const { results } = await env.DB.prepare(`
+    SELECT id, sku, name, category, unit, price, cost, stock_qty AS stockQty,
+           safety_stock_qty AS safetyStockQty, status, updated_at AS updatedAt
+    FROM products
+    ORDER BY updated_at DESC, created_at DESC
+    LIMIT ?
+  `).bind(limit).all();
+  return json({ ok: true, data: results || [] });
+}
+
+async function createProduct(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const name = String(payload.name || "").trim();
+  if (!name) return json({ ok: false, error: "missing_name" }, 400);
+  const id = crypto.randomUUID();
+  const sku = String(payload.sku || "").trim();
+  const category = String(payload.category || "").trim();
+  const unit = String(payload.unit || "件").trim() || "件";
+  const price = Number.parseInt(payload.price || 0, 10) || 0;
+  const cost = Number.parseInt(payload.cost || 0, 10) || 0;
+  const stockQty = Number.parseInt(payload.stockQty ?? payload.stock_qty ?? 0, 10) || 0;
+  const safetyStockQty = Number.parseInt(payload.safetyStockQty ?? payload.safety_stock_qty ?? 0, 10) || 0;
+  await env.DB.prepare(`
+    INSERT INTO products (
+      id, company_id, sku, name, category, unit, price, cost, stock_qty, safety_stock_qty, status, created_at, updated_at
+    ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))
+  `).bind(id, sku, name, category, unit, price, cost, stockQty, safetyStockQty).run();
+  return json({ ok: true, data: { id, sku, name } });
+}
+
+async function countRows(env, table, where) {
+  const sql = `SELECT COUNT(*) AS total FROM ${table} ${where ? "WHERE " + where : ""}`;
+  const row = await env.DB.prepare(sql).first();
+  return Number(row?.total || 0);
+}
+
+function readLimit(url, fallback) {
+  return Math.min(500, Math.max(1, Number(url.searchParams.get("limit") || fallback) || fallback));
+}
+
+function summarizeWebhookRaw(rawJson) {
+  const parsed = parseJson(rawJson, null);
+  if (!parsed || typeof parsed !== "object") return { contentType: "", invalidSignature: false, hasReplyPayload: false };
+  return {
+    status: parsed.status || 0,
+    contentType: parsed.contentType || "",
+    invalidSignature: Boolean(parsed.invalidSignature),
+    hasHtmlResponse: Boolean(parsed.hasHtmlResponse),
+    hasReplyPayload: Boolean(parsed.hasReplyPayload),
+    bodyTail: String(parsed.bodyTail || "").slice(-220),
+  };
+}
+
+function requireAdmin(request, env) {
+  const token = String(env.ADMIN_TOKEN || "").trim();
+  if (!token) return;
+  const url = new URL(request.url);
+  const provided = request.headers.get("x-admin-token") || url.searchParams.get("token") || "";
+  if (provided !== token) throw new HttpError(401, "admin_unauthorized");
+}
 async function createSalesRep(request, env) {
   requireDb(env);
   const payload = await request.json().catch(() => ({}));
@@ -933,6 +1096,10 @@ async function renderSalesInvitePage(request, env) {
 </html>`, { headers: HTML_HEADERS });
 }
 
+function renderAdminPage(env) {
+  const publicUrl = env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev";
+  return new Response(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gusys Admin</title><style>body{margin:0;background:#f6f7f9;color:#1f2937;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px}header{background:#fff;border-bottom:1px solid #d9dee7;padding:14px 18px;position:sticky;top:0}main{max-width:1180px;margin:auto;padding:16px 18px 36px}h1{font-size:18px;margin:0}.muted{color:#667085}.tabs{display:flex;gap:8px;overflow:auto;margin-bottom:12px}.tab,button{border:1px solid #0f766e;border-radius:6px;background:#0f766e;color:#fff;padding:9px 12px;cursor:pointer}.tab{background:#fff;color:#344054;border-color:#d9dee7}.tab.active{background:#0f766e;color:#fff;border-color:#0f766e}input{border:1px solid #cfd6e1;border-radius:6px;padding:9px 10px}.bar{display:flex;justify-content:space-between;gap:12px;align-items:center}.actions{display:flex;gap:8px}.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.metric,.panel{background:#fff;border:1px solid #d9dee7;border-radius:8px}.metric{padding:14px}.metric span{display:block;color:#667085;font-size:12px}.metric strong{display:block;font-size:26px;margin-top:8px}.panel{margin-top:12px}.panel h2{font-size:15px;margin:0;padding:12px 14px;border-bottom:1px solid #d9dee7}.body{padding:14px}.view{display:none}.view.active{display:block}.form{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:720px}th,td{border-bottom:1px solid #edf0f5;text-align:left;padding:10px;vertical-align:top}th{font-size:12px;color:#667085;background:#fafbfc}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}.pill{border-radius:999px;padding:3px 8px;font-size:12px;background:#fef3c7;color:#92400e}.pill.good{background:#dcfce7;color:#166534}.pill.bad{background:#fee2e2;color:#991b1b}.qr{width:70px;height:70px;border:1px solid #d9dee7;border-radius:6px}.log{white-space:pre-wrap;max-width:420px;color:#475467}.empty{text-align:center;color:#667085;padding:20px}@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.form{grid-template-columns:1fr}.bar{align-items:flex-start;flex-direction:column}.actions{width:100%}.actions input{flex:1}}</style></head><body><header><div class="bar"><div><h1>Gusys Admin</h1><div class="muted">經銷商 LINE OA 控制台</div></div><div class="actions"><input id="adminToken" type="password" placeholder="Admin token"><button id="saveToken">儲存</button><button id="refreshAll">更新</button></div></div></header><main><nav class="tabs" id="tabs"><button class="tab active" data-view="dashboard">總覽</button><button class="tab" data-view="sales">業務 QR</button><button class="tab" data-view="customers">用戶歸屬</button><button class="tab" data-view="inventory">進銷存</button><button class="tab" data-view="messages">LINE 訊息</button><button class="tab" data-view="ai">AI 監控</button><button class="tab" data-view="webhooks">Webhook</button></nav><section class="view active" id="view-dashboard"><div class="grid" id="metrics"></div><section class="panel"><h2>最近母站轉送</h2><div class="body" id="latestMother"></div></section></section><section class="view" id="view-sales"><section class="panel"><h2>新增業務</h2><div class="body"><div class="form"><input id="salesName" placeholder="姓名"><input id="salesPhone" placeholder="電話"><input id="salesLine" placeholder="LINE User ID"><input id="salesCode" placeholder="業務代碼，可空白"></div><button id="createSales">建立業務 QR</button><span id="salesStatus" class="muted"></span></div></section><section class="panel"><h2>業務清單</h2><div class="body table-wrap"><table><thead><tr><th>業務</th><th>代碼</th><th>QR</th><th>連結</th><th>狀態</th></tr></thead><tbody id="salesRows"></tbody></table></div></section></section><section class="view" id="view-customers"><section class="panel"><h2>用戶歸屬</h2><div class="body table-wrap"><table><thead><tr><th>用戶</th><th>LINE UID</th><th>業務</th><th>電話</th><th>綁定時間</th></tr></thead><tbody id="customerRows"></tbody></table></div></section></section><section class="view" id="view-inventory"><section class="panel"><h2>新增商品</h2><div class="body"><div class="form"><input id="productSku" placeholder="SKU"><input id="productCategory" placeholder="分類"><input id="productName" placeholder="商品名稱"><input id="productPrice" type="number" placeholder="售價"><input id="productCost" type="number" placeholder="成本"><input id="productStock" type="number" placeholder="庫存"><input id="productSafety" type="number" placeholder="安全庫存"></div><button id="createProduct">建立商品</button><span id="productStatus" class="muted"></span></div></section><section class="panel"><h2>商品庫存</h2><div class="body table-wrap"><table><thead><tr><th>商品</th><th>SKU</th><th>分類</th><th>售價</th><th>庫存</th><th>狀態</th></tr></thead><tbody id="productRows"></tbody></table></div></section></section><section class="view" id="view-messages"><section class="panel"><h2>LINE 訊息</h2><div class="body"><button id="runAi">AI 分析最新訊息</button> <span id="aiRunStatus" class="muted"></span><div class="table-wrap"><table><thead><tr><th>時間</th><th>LINE UID</th><th>內容</th><th>Thread</th></tr></thead><tbody id="messageRows"></tbody></table></div></div></section></section><section class="view" id="view-ai"><section class="panel"><h2>AI 監控洞察</h2><div class="body table-wrap"><table><thead><tr><th>時間</th><th>風險</th><th>分類</th><th>摘要</th><th>建議</th></tr></thead><tbody id="aiRows"></tbody></table></div></section></section><section class="view" id="view-webhooks"><section class="panel"><h2>Webhook 診斷</h2><div class="body table-wrap"><table><thead><tr><th>時間</th><th>來源</th><th>訊息</th><th>母站</th><th>摘要</th></tr></thead><tbody id="webhookRows"></tbody></table></div></section></section></main><script>const publicUrl=${JSON.stringify(publicUrl)};let adminToken=localStorage.getItem('gusys_admin_token')||'';document.getElementById('adminToken').value=adminToken;const qs=s=>document.querySelector(s);const money=v=>new Intl.NumberFormat('zh-TW').format(Number(v||0));function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}function authHeaders(){return adminToken?{'x-admin-token':adminToken}:{}}async function api(path,opt){const init=opt||{};init.headers=Object.assign({'content-type':'application/json'},authHeaders(),init.headers||{});const res=await fetch(path,init);const data=await res.json().catch(()=>({ok:false,error:'bad_json'}));if(!res.ok||!data.ok)throw new Error(data.error||data.message||('HTTP '+res.status));return data.data||data}document.getElementById('tabs').onclick=e=>{const b=e.target.closest('.tab');if(!b)return;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+b.dataset.view));};document.getElementById('saveToken').onclick=()=>{adminToken=qs('#adminToken').value.trim();localStorage.setItem('gusys_admin_token',adminToken);loadAll()};document.getElementById('refreshAll').onclick=()=>loadAll();document.getElementById('createSales').onclick=async()=>{try{await api('/api/sales/reps',{method:'POST',body:JSON.stringify({name:qs('#salesName').value,phone:qs('#salesPhone').value,lineUserId:qs('#salesLine').value,salesCode:qs('#salesCode').value})});qs('#salesStatus').textContent=' 已建立';await loadSales();await loadSummary()}catch(e){qs('#salesStatus').textContent=e.message}};document.getElementById('createProduct').onclick=async()=>{try{await api('/api/products',{method:'POST',body:JSON.stringify({sku:qs('#productSku').value,category:qs('#productCategory').value,name:qs('#productName').value,price:qs('#productPrice').value,cost:qs('#productCost').value,stockQty:qs('#productStock').value,safetyStockQty:qs('#productSafety').value})});qs('#productStatus').textContent=' 已建立';await loadProducts();await loadSummary()}catch(e){qs('#productStatus').textContent=e.message}};document.getElementById('runAi').onclick=async()=>{qs('#aiRunStatus').textContent='分析中';try{await api('/api/ai-monitor/analyze',{method:'POST',body:JSON.stringify({limit:30})});qs('#aiRunStatus').textContent='完成';await loadAi()}catch(e){qs('#aiRunStatus').textContent=e.message}};async function loadSummary(){const s=await api('/api/admin/summary');qs('#metrics').innerHTML=[['業務',s.sales],['用戶',s.customers],['商品',s.products],['LINE 訊息',s.messages],['母站轉送',s.webhooks],['高風險',s.highRisk]].map(x=>'<div class="metric"><span>'+esc(x[0])+'</span><strong>'+money(x[1])+'</strong></div>').join('');const lm=s.latestMother||{};qs('#latestMother').innerHTML='<div>Worker：<span class="mono">'+esc(publicUrl)+'</span></div><div>訊息：'+esc(lm.messageText)+'</div><div>時間：'+esc(lm.createdAt)+'</div><pre class="log">'+esc(lm.rawJson||'')+'</pre>'}async function loadSales(){const rows=await api('/api/sales/reps');qs('#salesRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.name)+'<div class="muted">'+esc(r.phone)+'</div></td><td class="mono">'+esc(r.salesCode)+'</td><td>'+(r.qrUrl?'<img class="qr" src="'+esc(r.qrUrl)+'">':'-')+'</td><td><a href="'+esc(r.inviteUrl)+'" target="_blank">開啟</a><div class="mono">'+esc(r.inviteUrl)+'</div></td><td><span class="pill good">'+esc(r.status)+'</span></td></tr>').join('')||'<tr><td colspan="5" class="empty">尚無業務</td></tr>'}async function loadCustomers(){const rows=await api('/api/admin/customers');qs('#customerRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.displayName||'-')+'</td><td class="mono">'+esc(r.lineUserId)+'</td><td>'+esc(r.salesName||'未綁定')+'<div class="mono">'+esc(r.salesCode||'')+'</div></td><td>'+esc(r.phone)+'</td><td>'+esc(r.boundAt||r.firstSeenAt)+'</td></tr>').join('')||'<tr><td colspan="5" class="empty">尚無用戶</td></tr>'}async function loadProducts(){const rows=await api('/api/products');qs('#productRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td class="mono">'+esc(r.sku)+'</td><td>'+esc(r.category)+'</td><td>'+money(r.price)+'</td><td>'+money(r.stockQty)+' / '+money(r.safetyStockQty)+'</td><td><span class="pill">'+esc(r.status)+'</span></td></tr>').join('')||'<tr><td colspan="6" class="empty">尚無商品</td></tr>'}async function loadMessages(){const rows=await api('/api/admin/line-messages');qs('#messageRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td>'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join('')||'<tr><td colspan="4" class="empty">尚無訊息</td></tr>'}async function loadWebhooks(){const rows=await api('/api/admin/webhooks');qs('#webhookRows').innerHTML=rows.map(r=>{const s=r.summary||{};const cls=s.invalidSignature?'bad':(s.hasReplyPayload?'good':'');return '<tr><td>'+esc(r.createdAt)+'</td><td>'+esc(r.source)+'</td><td>'+esc(r.messageText)+'</td><td>'+esc(r.motherStatus)+'</td><td><span class="pill '+cls+'">'+(s.invalidSignature?'簽章錯誤':(s.hasReplyPayload?'有回覆':'已送達'))+'</span><pre class="log">'+esc(s.bodyTail||'')+'</pre></td></tr>'}).join('')||'<tr><td colspan="5" class="empty">尚無紀錄</td></tr>'}async function loadAi(){const rows=await api('/api/ai-monitor/insights?limit=100');qs('#aiRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.createdAt)+'</td><td><span class="pill '+(r.riskLevel==='high'?'bad':r.riskLevel==='medium'?'':'good')+'">'+esc(r.riskLevel)+'</span></td><td>'+esc(r.category)+'</td><td>'+esc(r.summary)+'</td><td>'+esc(r.recommendedAction)+'</td></tr>').join('')||'<tr><td colspan="5" class="empty">尚無 AI 洞察</td></tr>'}async function loadAll(){try{await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadMessages(),loadWebhooks(),loadAi()])}catch(e){qs('#latestMother').innerHTML='<span style="color:#b91c1c">'+esc(e.message)+'</span>'}}loadAll();</script></body></html>`, { headers: HTML_HEADERS });
+}
 function renderHome(env) {
   const publicUrl = env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev";
   return new Response(`<!doctype html>
