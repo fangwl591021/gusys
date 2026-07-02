@@ -17,6 +17,11 @@ WETW_MEMBER_API_URL = "https://aiwe.cc/index.php/wp-json/wetw/v1/check-or-create
 WETW_POINT_INSERT_URL = "https://aiwe.cc/index.php/wp-json/wetw-point/v1/insert-user-point"
 WETW_POINT_QUERY_URL = "https://aiwe.cc/index.php/wp-json/wetw-point/v1/query-user-point-list"
 WETW_POINT_TYPE = "system_point"
+AI_MONITOR_ENABLED = "true"
+AI_MONITOR_MODEL = "gpt-4.1-mini"
+AI_MONITOR_LINE_MESSAGE_LIMIT = "30"
+AI_MONITOR_CATEGORIES = "客訴,詢價,訂單,點數,業務歸屬,產品問題,付款,出貨,一般問題"
+AI_MONITOR_RISK_KEYWORDS = "客訴,退款,詐騙,沒有收到,業務問題,產品不良,我要退貨"
 
 [[d1_databases]]
 binding = "DB"

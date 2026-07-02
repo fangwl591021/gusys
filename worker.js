@@ -28,6 +28,8 @@ export default {
       if (url.pathname === "/api/members/check-or-create" && request.method === "POST") return checkOrCreateMember(request, env);
       if (url.pathname === "/api/points/adjust" && request.method === "POST") return adjustMemberPoints(request, env);
       if (url.pathname === "/api/points/list" && request.method === "GET") return listMemberPoints(request, env);
+      if (url.pathname === "/api/ai-monitor/analyze" && request.method === "POST") return analyzeLineMonitor(request, env);
+      if (url.pathname === "/api/ai-monitor/insights" && request.method === "GET") return listAiMonitorInsights(request, env);
       if (url.pathname === "/api/reports/monthly-sales" && request.method === "GET") return monthlySalesReport(request, env);
 
       return json({ ok: false, error: "not_found", path: url.pathname }, 404);
@@ -566,6 +568,188 @@ function wetwConfig(env) {
     },
   };
 }
+async function analyzeLineMonitor(request, env) {
+  requireDb(env);
+  const cfg = aiMonitorConfig(env);
+  if (!cfg.enabled) return json({ ok: false, error: "ai_monitor_disabled" }, 400);
+  if (!cfg.apiKey) return json({ ok: false, error: "openai_api_key_missing" }, 400);
+
+  const payload = await request.json().catch(() => ({}));
+  const limit = Math.min(cfg.messageLimit, Math.max(1, Number(payload.limit || cfg.messageLimit) || cfg.messageLimit));
+  const threadId = String(payload.threadId || "").trim();
+  const messages = await loadLineMessagesForAi(env, { threadId, limit });
+  if (!messages.length) return json({ ok: false, error: "no_messages" }, 404);
+
+  const insight = await callOpenAiMonitor(cfg, messages);
+  const saved = await saveAiMonitorInsight(env, insight, messages, cfg.model);
+  return json({ ok: true, data: saved });
+}
+
+async function listAiMonitorInsights(request, env) {
+  requireDb(env);
+  const url = new URL(request.url);
+  const risk = String(url.searchParams.get("risk") || "").trim();
+  const threadId = String(url.searchParams.get("threadId") || "").trim();
+  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 50) || 50));
+  const where = [];
+  const binds = [];
+  if (risk) { where.push("risk_level = ?"); binds.push(risk); }
+  if (threadId) { where.push("thread_id = ?"); binds.push(threadId); }
+  const sql = `
+    SELECT id, thread_id AS threadId, source_message_ids AS sourceMessageIds,
+           category, risk_level AS riskLevel, summary, recommended_action AS recommendedAction,
+           sentiment, tags, model, created_at AS createdAt, updated_at AS updatedAt
+    FROM ai_monitor_insights
+    ${where.length ? "WHERE " + where.join(" AND ") : ""}
+    ORDER BY created_at DESC
+    LIMIT ?
+  `;
+  binds.push(limit);
+  const { results } = await env.DB.prepare(sql).bind(...binds).all();
+  return json({ ok: true, data: results || [] });
+}
+
+async function loadLineMessagesForAi(env, options) {
+  const limit = Math.min(100, Math.max(1, Number(options.limit || 30) || 30));
+  const threadId = String(options.threadId || "").trim();
+  if (threadId) {
+    const { results } = await env.DB.prepare(`
+      SELECT id, thread_id AS threadId, sender_role AS senderRole, sender_name AS senderName,
+             message_text AS messageText, created_at AS createdAt
+      FROM line_messages
+      WHERE thread_id = ? AND message_text <> ''
+      ORDER BY created_at DESC, inserted_at DESC
+      LIMIT ?
+    `).bind(threadId, limit).all();
+    return (results || []).reverse();
+  }
+  const { results } = await env.DB.prepare(`
+    SELECT m.id, m.thread_id AS threadId, m.sender_role AS senderRole, m.sender_name AS senderName,
+           m.message_text AS messageText, m.created_at AS createdAt
+    FROM line_messages m
+    WHERE m.message_text <> ''
+    ORDER BY m.created_at DESC, m.inserted_at DESC
+    LIMIT ?
+  `).bind(limit).all();
+  return (results || []).reverse();
+}
+
+async function callOpenAiMonitor(cfg, messages) {
+  const compactMessages = messages.map(item => ({
+    id: item.id,
+    threadId: item.threadId,
+    role: item.senderRole || "user",
+    name: item.senderName || "",
+    text: item.messageText || "",
+    at: item.createdAt || "",
+  }));
+  const prompt = [
+    "你是 LINE 官方帳號客服監控分析器。請只輸出 JSON，不要 markdown。",
+    "根據訊息判斷分類、風險、情緒、摘要、建議處理。",
+    `可用分類：${cfg.categories.join("、")}`,
+    `高風險關鍵字：${cfg.riskKeywords.join("、")}`,
+    "JSON 欄位：category, risk_level(low|medium|high), sentiment(positive|neutral|negative), summary, recommended_action, tags(array)。",
+    JSON.stringify(compactMessages),
+  ].join("\n");
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${cfg.apiKey}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: cfg.model,
+      input: prompt,
+      temperature: 0.2,
+      max_output_tokens: 600,
+    }),
+  });
+  const text = await response.text();
+  const data = parseJson(text, null);
+  if (!response.ok) {
+    return {
+      category: "一般問題",
+      risk_level: "medium",
+      sentiment: "neutral",
+      summary: "OpenAI 分析失敗",
+      recommended_action: `檢查 API 狀態：HTTP ${response.status}`,
+      tags: ["openai_error"],
+      raw: data || text.slice(0, 1000),
+    };
+  }
+  const outputText = extractOpenAiOutputText(data);
+  const parsed = parseJson(outputText, null) || {};
+  return normalizeAiInsight({ ...parsed, raw: data });
+}
+
+function extractOpenAiOutputText(data) {
+  if (!data || typeof data !== "object") return "";
+  if (typeof data.output_text === "string") return data.output_text;
+  const chunks = [];
+  for (const item of Array.isArray(data.output) ? data.output : []) {
+    for (const content of Array.isArray(item.content) ? item.content : []) {
+      if (typeof content.text === "string") chunks.push(content.text);
+    }
+  }
+  return chunks.join("\n");
+}
+
+function normalizeAiInsight(input) {
+  const risk = ["low", "medium", "high"].includes(input.risk_level) ? input.risk_level : "low";
+  const sentiment = ["positive", "neutral", "negative"].includes(input.sentiment) ? input.sentiment : "neutral";
+  const tags = Array.isArray(input.tags) ? input.tags.map(item => String(item).trim()).filter(Boolean).slice(0, 10) : [];
+  return {
+    category: String(input.category || "一般問題").slice(0, 80),
+    risk_level: risk,
+    sentiment,
+    summary: String(input.summary || "").slice(0, 1000),
+    recommended_action: String(input.recommended_action || "").slice(0, 1000),
+    tags,
+    raw: input.raw || input,
+  };
+}
+
+async function saveAiMonitorInsight(env, insight, messages, model) {
+  const id = crypto.randomUUID();
+  const threadId = String(messages[messages.length - 1]?.threadId || messages[0]?.threadId || "");
+  const messageIds = messages.map(item => item.id).filter(Boolean);
+  await env.DB.prepare(`
+    INSERT INTO ai_monitor_insights (
+      id, thread_id, source_message_ids, category, risk_level, summary,
+      recommended_action, sentiment, tags, model, raw_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `).bind(
+    id,
+    threadId,
+    JSON.stringify(messageIds),
+    insight.category,
+    insight.risk_level,
+    insight.summary,
+    insight.recommended_action,
+    insight.sentiment,
+    insight.tags.join(","),
+    model,
+    JSON.stringify(insight.raw || {}),
+  ).run();
+  return { id, threadId, sourceMessageIds: messageIds, ...insight, model };
+}
+
+function aiMonitorConfig(env) {
+  const enabled = String(env.AI_MONITOR_ENABLED || "true").toLowerCase() !== "false";
+  return {
+    enabled,
+    apiKey: String(env.OPENAI_API_KEY || "").trim(),
+    model: String(env.AI_MONITOR_MODEL || "gpt-4.1-mini").trim(),
+    messageLimit: Math.min(100, Math.max(1, Number(env.AI_MONITOR_LINE_MESSAGE_LIMIT || 30) || 30)),
+    categories: splitCsv(env.AI_MONITOR_CATEGORIES || "客訴,詢價,訂單,點數,業務歸屬,產品問題,付款,出貨,一般問題"),
+    riskKeywords: splitCsv(env.AI_MONITOR_RISK_KEYWORDS || "客訴,退款,詐騙,沒有收到,業務問題,產品不良,我要退貨"),
+  };
+}
+
+function splitCsv(value) {
+  return String(value || "").split(",").map(item => item.trim()).filter(Boolean);
+}
 async function monthlySalesReport(request, env) {
   requireDb(env);
   const url = new URL(request.url);
@@ -688,6 +872,7 @@ function renderHome(env) {
         <li>業務 QR：每位業務產生 invite URL 與 QR URL</li>
         <li>用戶歸屬：customer_sales_bindings 鎖定業務</li>
         <li>點數 adapter：會員建立、贈點/扣點、點數紀錄查詢</li>
+        <li>AI 監控：LINE 訊息分類、摘要、風險標籤</li>
       </ul>
     </section>
   </main>
@@ -713,6 +898,7 @@ async function handleHubTest(env) {
       MOTHER_WEBHOOK_URL: Boolean(env.MOTHER_WEBHOOK_URL),
       WETW_API_KEY: Boolean(env.WETW_API_KEY),
       WETW_SHOP_ID: Boolean(env.WETW_SHOP_ID),
+      OPENAI_API_KEY: Boolean(env.OPENAI_API_KEY),
     },
     wetw: wetwConfig(env).configured,
     motherWebhook: {

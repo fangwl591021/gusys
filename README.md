@@ -80,3 +80,25 @@ Configured non-secret endpoints:
 
 When `WETW_API_KEY` or `WETW_SHOP_ID` is missing, the adapter returns a skipped
 configuration result instead of breaking sales QR binding.
+## AI monitor
+
+Gusys can analyze stored LINE messages with the OpenAI Responses API.
+
+Secret:
+
+```powershell
+npx.cmd wrangler secret put OPENAI_API_KEY
+```
+
+Routes:
+
+- `POST /api/ai-monitor/analyze` - analyze recent LINE messages and save an insight
+- `GET /api/ai-monitor/insights` - list saved AI insights
+
+Optional request body for analysis:
+
+```json
+{ "threadId": "Uxxxxxxxx", "limit": 30 }
+```
+
+The monitor writes only summary, category, risk level, sentiment, tags, and recommended action. It does not reply to LINE users.
