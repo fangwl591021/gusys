@@ -25,6 +25,9 @@ export default {
       if (url.pathname === "/api/sales/reps" && request.method === "POST") return createSalesRep(request, env);
       if (url.pathname === "/api/sales/reps" && request.method === "GET") return listSalesReps(env);
       if (url.pathname === "/api/sales/bind" && request.method === "POST") return bindCustomerToSalesRep(request, env);
+      if (url.pathname === "/api/members/check-or-create" && request.method === "POST") return checkOrCreateMember(request, env);
+      if (url.pathname === "/api/points/adjust" && request.method === "POST") return adjustMemberPoints(request, env);
+      if (url.pathname === "/api/points/list" && request.method === "GET") return listMemberPoints(request, env);
       if (url.pathname === "/api/reports/monthly-sales" && request.method === "GET") return monthlySalesReport(request, env);
 
       return json({ ok: false, error: "not_found", path: url.pathname }, 404);
@@ -321,6 +324,46 @@ async function bindCustomerToSalesRep(request, env) {
   return json({ ok: true, data: result });
 }
 
+async function checkOrCreateMember(request, env) {
+  const payload = await request.json().catch(() => ({}));
+  const result = await syncWetwMember(env, {
+    lineUserId: payload.lineUserId || payload.LINE_user_id,
+    displayName: payload.displayName || payload.LINE_display_name,
+    statusMessage: payload.statusMessage || payload.LINE_status_message,
+    pictureUrl: payload.pictureUrl || payload.LINE_picture_url,
+  });
+  return json({ ok: result.ok, data: result }, result.ok ? 200 : result.status || 400);
+}
+
+async function adjustMemberPoints(request, env) {
+  const payload = await request.json().catch(() => ({}));
+  const result = await callWetwPointInsert(env, {
+    lineUserId: payload.lineUserId || payload.LINE_user_id,
+    eventName: payload.eventName || payload.event_name,
+    eventContent: payload.eventContent || payload.event_content,
+    pointType: payload.pointType || payload.point_type,
+    points: payload.points ?? payload.get_point,
+    shopUserLineId: payload.shopUserLineId || payload.shop_user_lineid,
+    childShopName: payload.childShopName || payload.child_shop_name,
+    childShopRenew: payload.childShopRenew ?? payload.child_shop_renew,
+    shopRemark: payload.shopRemark || payload.shop_remark,
+  });
+  return json({ ok: result.ok, data: result }, result.ok ? 200 : result.status || 400);
+}
+
+async function listMemberPoints(request, env) {
+  const url = new URL(request.url);
+  const result = await callWetwPointQuery(env, {
+    lineUserId: url.searchParams.get("lineUserId") || url.searchParams.get("LINE_user_id"),
+    shopId: url.searchParams.get("shopId") || url.searchParams.get("shop_id"),
+    pointType: url.searchParams.get("pointType") || url.searchParams.get("point_type"),
+    dateStart: url.searchParams.get("dateStart") || url.searchParams.get("date_start"),
+    dateEnd: url.searchParams.get("dateEnd") || url.searchParams.get("date_end"),
+    page: url.searchParams.get("page"),
+    perPage: url.searchParams.get("perPage") || url.searchParams.get("per_page"),
+  });
+  return json({ ok: result.ok, data: result }, result.ok ? 200 : result.status || 400);
+}
 async function bindCustomerBySalesCode(env, input) {
   const lineUserId = String(input.lineUserId || "").trim();
   const salesCode = normalizeSalesCode(input.salesCode || "");
@@ -390,6 +433,13 @@ async function bindCustomerBySalesCode(env, input) {
     `).bind(crypto.randomUUID(), customerId, salesRep.id, String(input.source || "sales_qr")).run();
   }
 
+  const memberSync = await syncWetwMember(env, {
+    lineUserId,
+    displayName: input.displayName,
+    statusMessage: input.statusMessage,
+    pictureUrl: input.pictureUrl,
+  }).catch(error => ({ ok: false, skipped: false, error: String(error?.message || error) }));
+
   return {
     customerId,
     lineUserId,
@@ -397,9 +447,125 @@ async function bindCustomerBySalesCode(env, input) {
     salesCode,
     salesName: salesRep.name,
     alreadyBound: Boolean(activeBinding),
+    memberSync,
   };
 }
 
+async function syncWetwMember(env, input) {
+  const lineUserId = String(input.lineUserId || "").trim();
+  if (!lineUserId) return { ok: false, skipped: false, error: "missing_line_user_id", status: 400 };
+  const cfg = wetwConfig(env);
+  if (!cfg.apiKey || !cfg.shopId) {
+    return { ok: false, skipped: true, error: "wetw_member_config_missing", configured: cfg.configured };
+  }
+  return callWetwApi(cfg.memberApiUrl, {
+    api_key: cfg.apiKey,
+    shop_id: cfg.shopId,
+    LINE_user_id: lineUserId,
+    LINE_display_name: String(input.displayName || "").trim(),
+    LINE_status_message: String(input.statusMessage || "").trim(),
+    LINE_picture_url: String(input.pictureUrl || "").trim(),
+  });
+}
+
+async function callWetwPointInsert(env, input) {
+  const lineUserId = String(input.lineUserId || "").trim();
+  const eventName = String(input.eventName || "").trim();
+  const eventContent = String(input.eventContent || eventName || "Gusys 點數異動").trim();
+  const points = Number(input.points);
+  if (!lineUserId) return { ok: false, skipped: false, error: "missing_line_user_id", status: 400 };
+  if (!eventName) return { ok: false, skipped: false, error: "missing_event_name", status: 400 };
+  if (!Number.isFinite(points) || points === 0) return { ok: false, skipped: false, error: "invalid_points", status: 400 };
+  const cfg = wetwConfig(env);
+  if (!cfg.apiKey || !cfg.shopId) {
+    return { ok: false, skipped: true, error: "wetw_point_config_missing", configured: cfg.configured };
+  }
+  return callWetwApi(cfg.pointInsertUrl, {
+    api_key: cfg.apiKey,
+    LINE_user_id: lineUserId,
+    shop_id: cfg.shopId,
+    event_name: eventName,
+    event_content: eventContent,
+    point_type: String(input.pointType || cfg.pointType || "system_point").trim(),
+    get_point: points,
+    shop_user_lineid: String(input.shopUserLineId || "").trim(),
+    child_shop_name: String(input.childShopName || "").trim(),
+    child_shop_renew: Number(input.childShopRenew || 0) || 0,
+    shop_remark: String(input.shopRemark || "Gusys API").trim(),
+  });
+}
+
+async function callWetwPointQuery(env, input) {
+  const cfg = wetwConfig(env);
+  if (!cfg.apiKey) return { ok: false, skipped: true, error: "wetw_api_key_missing", configured: cfg.configured };
+  const lineUserId = String(input.lineUserId || "").trim();
+  const shopId = String(input.shopId || cfg.shopId || "").trim();
+  if (!lineUserId && !shopId) return { ok: false, skipped: false, error: "missing_query_condition", status: 400 };
+  const payload = {
+    api_key: cfg.apiKey,
+    page: Math.max(1, Number(input.page || 1) || 1),
+    per_page: Math.min(100, Math.max(1, Number(input.perPage || 20) || 20)),
+  };
+  if (lineUserId) payload.LINE_user_id = lineUserId;
+  if (shopId) payload.shop_id = Number(shopId) || shopId;
+  if (input.pointType) payload.point_type = String(input.pointType).trim();
+  if (input.dateStart) payload.date_start = String(input.dateStart).trim();
+  if (input.dateEnd) payload.date_end = String(input.dateEnd).trim();
+  return callWetwApi(cfg.pointQueryUrl, payload);
+}
+
+async function callWetwApi(url, payload) {
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    const data = parseJson(text, null);
+    return {
+      ok: response.ok && data?.success !== false,
+      status: response.status,
+      elapsedMs: Date.now() - startedAt,
+      code: data?.code || "",
+      message: data?.message || "",
+      data,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      elapsedMs: Date.now() - startedAt,
+      error: String(error?.message || error),
+    };
+  }
+}
+
+function wetwConfig(env) {
+  const apiKey = String(env.WETW_API_KEY || "").trim();
+  const shopId = String(env.WETW_SHOP_ID || "").trim();
+  const memberApiUrl = String(env.WETW_MEMBER_API_URL || "https://aiwe.cc/index.php/wp-json/wetw/v1/check-or-create-line-user").trim();
+  const pointInsertUrl = String(env.WETW_POINT_INSERT_URL || "https://aiwe.cc/index.php/wp-json/wetw-point/v1/insert-user-point").trim();
+  const pointQueryUrl = String(env.WETW_POINT_QUERY_URL || "https://aiwe.cc/index.php/wp-json/wetw-point/v1/query-user-point-list").trim();
+  const pointType = String(env.WETW_POINT_TYPE || "system_point").trim();
+  return {
+    apiKey,
+    shopId,
+    memberApiUrl,
+    pointInsertUrl,
+    pointQueryUrl,
+    pointType,
+    configured: {
+      apiKey: Boolean(apiKey),
+      shopId: Boolean(shopId),
+      memberApiUrl: Boolean(memberApiUrl),
+      pointInsertUrl: Boolean(pointInsertUrl),
+      pointQueryUrl: Boolean(pointQueryUrl),
+      pointType,
+    },
+  };
+}
 async function monthlySalesReport(request, env) {
   requireDb(env);
   const url = new URL(request.url);
@@ -521,6 +687,7 @@ function renderHome(env) {
         <li>LINE 訊息紀錄：D1 有綁定時寫入 line_threads / line_messages</li>
         <li>業務 QR：每位業務產生 invite URL 與 QR URL</li>
         <li>用戶歸屬：customer_sales_bindings 鎖定業務</li>
+        <li>點數 adapter：會員建立、贈點/扣點、點數紀錄查詢</li>
       </ul>
     </section>
   </main>
@@ -544,7 +711,10 @@ async function handleHubTest(env) {
       LINE_CHANNEL_ACCESS_TOKEN: Boolean(env.LINE_CHANNEL_ACCESS_TOKEN),
       GAS_URL: Boolean(env.GAS_URL),
       MOTHER_WEBHOOK_URL: Boolean(env.MOTHER_WEBHOOK_URL),
+      WETW_API_KEY: Boolean(env.WETW_API_KEY),
+      WETW_SHOP_ID: Boolean(env.WETW_SHOP_ID),
     },
+    wetw: wetwConfig(env).configured,
     motherWebhook: {
       url: motherUrl,
       ...mother,

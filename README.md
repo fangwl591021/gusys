@@ -55,3 +55,28 @@ npx.cmd wrangler d1 migrations apply gusys --remote
 
 After `d1 create`, update `wrangler.toml` with the returned `database_id` and
 uncomment the `[[d1_databases]]` block.
+
+## AIWE / WETW points adapter
+
+The Worker is wired for the AIWE member and point APIs. Keep the API key out of
+source control:
+
+```powershell
+npx.cmd wrangler secret put WETW_API_KEY
+```
+
+Set the actual shop id after confirming the biotechnology company account:
+
+```text
+WETW_SHOP_ID=<actual shop id>
+```
+
+Configured non-secret endpoints:
+
+- `WETW_MEMBER_API_URL=https://aiwe.cc/index.php/wp-json/wetw/v1/check-or-create-line-user`
+- `WETW_POINT_INSERT_URL=https://aiwe.cc/index.php/wp-json/wetw-point/v1/insert-user-point`
+- `WETW_POINT_QUERY_URL=https://aiwe.cc/index.php/wp-json/wetw-point/v1/query-user-point-list`
+- `WETW_POINT_TYPE=system_point`
+
+When `WETW_API_KEY` or `WETW_SHOP_ID` is missing, the adapter returns a skipped
+configuration result instead of breaking sales QR binding.
