@@ -1,0 +1,20 @@
+﻿name = "gusys"
+main = "worker.js"
+compatibility_date = "2026-07-02"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[vars]
+GAS_URL = "https://aiwe.cc/index.php/line_login/10279/"
+MOTHER_WEBHOOK_URL = "https://aiwe.cc/index.php/line_login/10279/"
+MOTHER_WEBHOOK_MODE = "action"
+WORKER_PUBLIC_URL = "https://gusys.fangwl591021.workers.dev"
+LINE_OA_NAME = "Gusys 經銷商系統"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gusys"
+database_id = "53490e81-3960-411c-8cd3-0bb2130452fe"
