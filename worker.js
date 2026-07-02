@@ -56,10 +56,10 @@ async function handleLineWebhook(request, env, ctx) {
 
   const signature = request.headers.get("x-line-signature") || "";
   const rawBody = await request.text();
+  const lineBody = parseJson(rawBody, {});
   const signatureResult = await verifyLineSignature(rawBody, signature, env.LINE_CHANNEL_SECRET);
   if (!signatureResult.ok) {
-    const verifyBody = parseJson(rawBody, {});
-    if (isLineVerifyProbe(verifyBody)) {
+    if (isLineVerifyProbe(lineBody)) {
       await recordWebhookDebug(env, "LINE_WEBHOOK_VERIFY_PROBE_LAST", {
         reason: signatureResult.reason,
         hasSignature: Boolean(signature),
@@ -67,6 +67,11 @@ async function handleLineWebhook(request, env, ctx) {
         acceptedAt: new Date().toISOString(),
       });
       return json({ ok: true, verify: true, signature: "probe_accepted" });
+    }
+    if (env.DB) {
+      await recordRejectedLineEvents(env, lineBody, rawBody, signatureResult.reason).catch(error => {
+        console.error(JSON.stringify({ level: "error", message: "record_rejected_line_events_failed", error: String(error?.message || error) }));
+      });
     }
     await recordWebhookDebug(env, "LINE_WEBHOOK_REJECT_LAST", {
       reason: signatureResult.reason,
@@ -77,7 +82,6 @@ async function handleLineWebhook(request, env, ctx) {
     return new Response("Invalid Signature", { status: 403, headers: TEXT_HEADERS });
   }
 
-  const lineBody = parseJson(rawBody, {});
   const events = Array.isArray(lineBody.events) ? lineBody.events : [];
 
   if (env.DB) {
@@ -221,6 +225,30 @@ function extractSalesCode(text) {
   return match ? match[1] : "";
 }
 
+async function recordRejectedLineEvents(env, lineBody, rawBody, reason) {
+  const events = Array.isArray(lineBody?.events) ? lineBody.events : [];
+  if (!events.length) {
+    await env.DB.prepare(`
+      INSERT INTO webhook_events (
+        id, source, event_type, message_text, mother_status, handled_by_gusys, raw_json
+      ) VALUES (?, 'line', 'signature_reject', ?, 403, 0, ?)
+    `).bind(crypto.randomUUID(), String(reason || 'invalid_signature'), rawBody.slice(0, 5000)).run();
+    return;
+  }
+  for (const event of events) {
+    const eventId = `reject_${String(event.webhookEventId || event.message?.id || crypto.randomUUID())}`;
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO webhook_events (
+        id, source, line_user_id, event_type, message_text, mother_status, handled_by_gusys, raw_json
+      ) VALUES (?, 'line', ?, 'signature_reject', ?, 403, 0, ?)
+    `).bind(
+      eventId,
+      String(event.source?.userId || ''),
+      `${String(reason || 'invalid_signature')}: ${lineEventText(event)}`,
+      JSON.stringify(event),
+    ).run();
+  }
+}
 async function recordLineEvents(env, events, rawBody) {
   for (const event of events) {
     const eventId = String(event.webhookEventId || event.message?.id || crypto.randomUUID());
