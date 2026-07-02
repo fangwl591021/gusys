@@ -139,10 +139,11 @@ async function forwardToMotherWebhook(env, rawBody, signature) {
     ? rawBody
     : JSON.stringify({ action: "LINE_WEBHOOK", payload: lineBody });
 
+  const forwardSignature = await buildMotherSignature(env, body, signature);
   const headers = {
     "content-type": "application/json",
   };
-  if (signature) headers["x-line-signature"] = signature;
+  if (forwardSignature) headers["x-line-signature"] = forwardSignature;
 
   const startedAt = Date.now();
   try {
@@ -164,7 +165,10 @@ async function forwardToMotherWebhook(env, rawBody, signature) {
         elapsedMs: Date.now() - startedAt,
         hasReplyPayload: Boolean(extractReplyPayload(parsed)),
         contentType: response.headers.get("content-type") || "",
-        bodyPreview: text.slice(0, 800),
+        invalidSignature: /invalid\s+signature/i.test(text),
+        hasHtmlResponse: /<html[\s>]/i.test(text),
+        bodyPreview: text.slice(0, 2200),
+        bodyTail: text.slice(-1200),
       },
     };
   } catch (error) {
@@ -208,6 +212,20 @@ function buildLocalKeywordReplyPayload(events, env) {
   }
 
   return null;
+}
+async function buildMotherSignature(env, body, originalSignature) {
+  const secret = env.MOTHER_LINE_CHANNEL_SECRET;
+  if (!secret) return originalSignature;
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  return arrayBufferToBase64(signature);
 }
 function extractReplyPayload(value) {
   if (!value || typeof value !== "object") return null;
@@ -975,6 +993,7 @@ async function handleHubTest(env) {
       LINE_CHANNEL_SECRET: Boolean(env.LINE_CHANNEL_SECRET),
       LINE_CHANNEL_ACCESS_TOKEN: Boolean(env.LINE_CHANNEL_ACCESS_TOKEN),
       MOTHER_WEBHOOK_URL: Boolean(env.MOTHER_WEBHOOK_URL),
+      MOTHER_LINE_CHANNEL_SECRET: Boolean(env.MOTHER_LINE_CHANNEL_SECRET),
       WETW_API_KEY: Boolean(env.WETW_API_KEY),
       WETW_SHOP_ID: Boolean(env.WETW_SHOP_ID),
       OPENAI_API_KEY: Boolean(env.OPENAI_API_KEY),
