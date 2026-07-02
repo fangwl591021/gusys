@@ -340,7 +340,11 @@ async function recordLineEvents(env, events, rawBody) {
     const text = lineEventText(event);
     const createdAt = String(event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString());
     const threadId = lineUserId || eventId;
-    const displayName = lineUserId;
+    const crmProfile = await ensureCustomerFromLineEvent(env, event).catch(error => {
+      console.error(JSON.stringify({ level: "error", message: "ensure_crm_customer_failed", error: String(error?.message || error) }));
+      return null;
+    });
+    const displayName = crmProfile?.displayName || lineUserId;
 
     await env.DB.prepare(`
       INSERT INTO line_threads (
@@ -388,6 +392,45 @@ function lineEventText(event) {
   return `[${event.type || "event"}]`;
 }
 
+async function ensureCustomerFromLineEvent(env, event) {
+  const lineUserId = String(event?.source?.userId || "").trim();
+  if (!lineUserId) return null;
+
+  const createdAt = String(event?.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString());
+  const profile = await fetchLineProfile(env, lineUserId);
+  const displayName = String(profile.displayName || lineUserId).trim();
+
+  await env.DB.prepare(`
+    INSERT INTO customers (
+      id, company_id, line_user_id, display_name, status, first_seen_at, created_at, updated_at
+    ) VALUES (?, 'default', ?, ?, 'active', ?, datetime('now'), datetime('now'))
+    ON CONFLICT(line_user_id) DO UPDATE SET
+      display_name = CASE WHEN excluded.display_name <> '' THEN excluded.display_name ELSE customers.display_name END,
+      status = 'active',
+      updated_at = datetime('now')
+  `).bind(crypto.randomUUID(), lineUserId, displayName, createdAt).run();
+
+  return { lineUserId, displayName, pictureUrl: profile.pictureUrl || "" };
+}
+
+async function fetchLineProfile(env, lineUserId) {
+  if (!env.LINE_CHANNEL_ACCESS_TOKEN || !lineUserId) return {};
+  try {
+    const response = await fetch(`https://api.line.me/v2/bot/profile/${encodeURIComponent(lineUserId)}`, {
+      headers: { Authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}` },
+    });
+    if (!response.ok) return {};
+    const data = await response.json().catch(() => ({}));
+    return {
+      displayName: String(data.displayName || ""),
+      pictureUrl: String(data.pictureUrl || ""),
+      statusMessage: String(data.statusMessage || ""),
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function adminSummary(request, env) {
   requireAdmin(request, env);
   requireDb(env);
@@ -424,11 +467,17 @@ async function listAdminCustomers(request, env) {
   const { results } = await env.DB.prepare(`
     SELECT c.id, c.line_user_id AS lineUserId, c.display_name AS displayName,
            c.phone, c.address, c.status, c.first_seen_at AS firstSeenAt,
-           sr.sales_code AS salesCode, sr.name AS salesName, b.bound_at AS boundAt
+           c.updated_at AS updatedAt,
+           sr.sales_code AS salesCode, sr.name AS salesName, b.bound_at AS boundAt,
+           lt.last_message_at AS lastMessageAt,
+           COUNT(lm.id) AS messageCount
     FROM customers c
     LEFT JOIN customer_sales_bindings b ON b.customer_id = c.id AND b.active = 1
     LEFT JOIN sales_reps sr ON sr.id = b.sales_rep_id
-    ORDER BY c.updated_at DESC, c.created_at DESC
+    LEFT JOIN line_threads lt ON lt.source_user_id = c.line_user_id
+    LEFT JOIN line_messages lm ON lm.sender_id = c.line_user_id
+    GROUP BY c.id
+    ORDER BY COALESCE(lt.last_message_at, c.updated_at, c.created_at) DESC
     LIMIT ?
   `).bind(limit).all();
   return json({ ok: true, data: results || [] });
@@ -1341,7 +1390,7 @@ function renderHookteaAdminPage(env) {
   <main class="main-content"><header class="page-header"><div><div class="page-title" id="pageTitle">營運統計</div><div class="page-subtitle" id="pageSubtitle">以 HookTea 後台結構管理 CRM、商城、點數與經銷商歸屬</div></div><div class="header-actions"><span class="status-badge" id="systemStatus">連線中</span><input id="adminToken" type="password" placeholder="Admin token"><button class="btn-outline" id="saveToken">儲存</button><button class="btn-green-main" id="refreshAll">更新</button></div></header><div class="content">
     <section class="view active" id="view-dashboard"><div class="stats-grid" id="metrics"></div><section class="panel"><div class="panel-header"><div class="section-title">營運摘要</div><span class="muted" id="lastRefresh"></span></div><div class="panel-body"><div class="ops-list" id="opsSummary"></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">最近 LINE 訊息</div><button class="btn-outline btn-small" data-jump="messages">查看全部</button></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>用戶</th><th>內容</th><th>Thread</th></tr></thead><tbody id="dashboardMessages"></tbody></table></div></section></section>
     <section class="view" id="view-sales"><section class="panel"><div class="panel-header"><div class="section-title">新增業務與專屬 QR</div><span class="muted" id="salesStatus"></span></div><div class="panel-body"><div class="form-grid"><input id="salesName" placeholder="業務姓名"><input id="salesPhone" placeholder="電話"><input id="salesLine" placeholder="LINE User ID"><input id="salesCode" placeholder="業務代碼，可空白"></div><button class="btn-green-main" id="createSales">建立業務 QR</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">業務清單</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>業務</th><th>代碼</th><th>QR</th><th>邀請連結</th><th>狀態</th></tr></thead><tbody id="salesRows"></tbody></table></div></section></section>
-    <section class="view" id="view-customers"><section class="panel"><div class="panel-header"><div class="section-title">客戶 CRM 與業務歸屬</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>用戶</th><th>LINE UID</th><th>歸屬業務</th><th>電話</th><th>綁定時間</th></tr></thead><tbody id="customerRows"></tbody></table></div></section></section>
+    <section class="view" id="view-customers"><section class="panel"><div class="panel-header"><div class="section-title">客戶 CRM</div><span class="muted">加入官方帳號即建檔，業務歸屬為 CRM 欄位</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>會員</th><th>LINE UID</th><th>業務歸屬</th><th>互動</th><th>加入時間</th></tr></thead><tbody id="customerRows"></tbody></table></div></section></section>
     <section class="view" id="view-inventory"><section class="panel"><div class="panel-header"><div class="section-title">新增商品</div><span class="muted" id="productStatus"></span></div><div class="panel-body"><div class="form-grid"><input id="productSku" placeholder="SKU"><input id="productCategory" placeholder="分類"><input id="productName" placeholder="商品名稱"><input id="productPrice" type="number" placeholder="售價"><input id="productCost" type="number" placeholder="成本"><input id="productStock" type="number" placeholder="庫存"><input id="productSafety" type="number" placeholder="安全庫存"></div><button class="btn-green-main" id="createProduct">建立商品</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">商品庫存</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>商品</th><th>SKU</th><th>分類</th><th>售價</th><th>庫存</th><th>狀態</th></tr></thead><tbody id="productRows"></tbody></table></div></section></section>
     <section class="view" id="view-reports"><section class="panel"><div class="panel-header"><div class="section-title">每月業績報表</div><div><input id="reportPeriod" type="month"><button class="btn-outline btn-small" id="loadReport">查詢</button></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>業務</th><th>代碼</th><th>訂單數</th><th>營收</th><th>毛利</th></tr></thead><tbody id="reportRows"></tbody></table></div></section></section>
     <section class="view" id="view-orders"><section class="panel"><div class="panel-header"><div class="section-title">訂單維護</div><span class="status-badge warn">待串接</span></div><div class="panel-body"><div class="ops-list"><div class="ops-item"><div class="ops-label">HookTea 對應功能</div><div class="ops-value">訂單查詢、付款狀態、出貨狀態、取消保護</div></div><div class="ops-item"><div class="ops-label">Gusys 下一步</div><div class="ops-value">建立 orders / order_items，並綁定 sales_rep_id 供業績歸屬</div></div><div class="ops-item"><div class="ops-label">目前來源</div><div class="ops-value">尚未有 Gusys 訂單 API</div></div></div></div></section></section>
@@ -1355,7 +1404,7 @@ function renderHookteaAdminPage(env) {
   </div></main><div class="login-cover" id="loginCover"><div class="login-box"><div class="login-title">需要 Admin token</div><div class="muted">請輸入 Worker 環境變數 ADMIN_TOKEN。</div><input id="loginToken" type="password" placeholder="Admin token"><button class="btn-green-main" id="loginSubmit">進入後台</button></div></div>
   <script>
     const publicUrl = ${JSON.stringify(publicUrl)}; const motherUrl = ${JSON.stringify(motherUrl)};
-    const titles = {dashboard:["營運統計","即時掌握業務、客戶、商品、LINE 訊息與母站轉送"],sales:["業務 QR","建立業務專屬 QR，作為日後業績歸屬依據"],customers:["客戶 CRM","查看用戶與業務的綁定關係"],inventory:["商城商品","管理商品、售價、成本與安全庫存"],reports:["業績報表","每月業務績效與毛利彙整"],orders:["訂單維護","HookTea 同款訂單工作區，待串接 Gusys 訂單資料表"],points:["點數總表","對接母站點數 API，集中查詢會員點數紀錄"],messages:["LINE 訊息","查詢 LINE OA 對話紀錄"],ai:["AI 後台監控","追蹤高風險訊息、分類與建議動作"],webhooks:["雙 Webhook","查看母站轉送狀態，不顯示整段 HTML 原始碼"],richmenu:["圖文選單","規劃 LINE 圖文選單與 LIFF 入口"],audit:["操作紀錄","記錄後台操作與 webhook 重要事件"],settings:["系統設定","確認 Worker、LINE Webhook 與母站 Webhook"]};
+    const titles = {dashboard:["營運統計","即時掌握業務、客戶、商品、LINE 訊息與母站轉送"],sales:["業務 QR","建立業務專屬 QR，作為日後業績歸屬依據"],customers:["客戶 CRM","所有加入官方帳號者自動建檔，並追蹤互動與業務歸屬"],inventory:["商城商品","管理商品、售價、成本與安全庫存"],reports:["業績報表","每月業務績效與毛利彙整"],orders:["訂單維護","HookTea 同款訂單工作區，待串接 Gusys 訂單資料表"],points:["點數總表","對接母站點數 API，集中查詢會員點數紀錄"],messages:["LINE 訊息","查詢 LINE OA 對話紀錄"],ai:["AI 後台監控","追蹤高風險訊息、分類與建議動作"],webhooks:["雙 Webhook","查看母站轉送狀態，不顯示整段 HTML 原始碼"],richmenu:["圖文選單","規劃 LINE 圖文選單與 LIFF 入口"],audit:["操作紀錄","記錄後台操作與 webhook 重要事件"],settings:["系統設定","確認 Worker、LINE Webhook 與母站 Webhook"]};
     let adminToken = localStorage.getItem("gusys_admin_token") || ""; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
     const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); const money = v => new Intl.NumberFormat("zh-TW").format(Number(v || 0));
     qs("#adminToken").value = adminToken; function headers(){ return adminToken ? {"x-admin-token":adminToken} : {}; } function badge(text,tone){ return '<span class="status-badge '+(tone||"")+'">'+esc(text)+'</span>'; }
@@ -1369,7 +1418,7 @@ function renderHookteaAdminPage(env) {
     function showUnauthorized(){ qs("#systemStatus").textContent = "需要 token"; qs("#systemStatus").className = "status-badge warn"; qs("#loginCover").style.display = "flex"; } function tableEmpty(cols,text){ return '<tr><td colspan="'+cols+'" class="empty">'+esc(text)+'</td></tr>'; }
     async function loadSummary(){ const s = await api("/api/admin/summary"); qs("#metrics").innerHTML = [["業務",s.sales],["用戶",s.customers],["商品",s.products],["LINE 訊息",s.messages],["母站轉送",s.webhooks],["高風險",s.highRisk]].map(i => '<div class="stat-card"><div class="stat-label">'+esc(i[0])+'</div><div class="stat-value">'+money(i[1])+'</div></div>').join(""); const latest = s.latestMother || {}; const motherState = latest.motherStatus ? "HTTP " + latest.motherStatus : "尚無紀錄"; qs("#opsSummary").innerHTML = [["Worker",publicUrl],["LINE Webhook",publicUrl+"/line-webhook"],["母站 Webhook",motherUrl],["最近母站轉送",motherState],["最近訊息",latest.messageText||"尚無"],["最近時間",latest.createdAt||"尚無"]].map(i => '<div class="ops-item"><div class="ops-label">'+esc(i[0])+'</div><div class="ops-value">'+esc(i[1])+'</div></div>').join(""); qs("#lastRefresh").textContent = new Date().toLocaleString("zh-TW"); qs("#systemStatus").textContent = "正常"; qs("#systemStatus").className = "status-badge"; }
     async function loadSales(){ const rows = await api("/api/sales/reps"); qs("#salesRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong><div class="muted">'+esc(r.phone)+'</div></td><td class="mono">'+esc(r.salesCode)+'</td><td>'+(r.qrUrl?'<img class="qr" src="'+esc(r.qrUrl)+'" alt="QR">':"-")+'</td><td><a href="'+esc(r.inviteUrl)+'" target="_blank">開啟</a><div class="mono summary-text">'+esc(r.inviteUrl)+'</div></td><td>'+badge(r.status||"active")+'</td></tr>').join("") || tableEmpty(5,"尚無業務"); }
-    async function loadCustomers(){ const rows = await api("/api/admin/customers"); qs("#customerRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.displayName||"-")+'</strong></td><td class="mono">'+esc(r.lineUserId)+'</td><td>'+esc(r.salesName||"未綁定")+'<div class="mono">'+esc(r.salesCode||"")+'</div></td><td>'+esc(r.phone||"")+'</td><td>'+esc(r.boundAt||r.firstSeenAt||"")+'</td></tr>').join("") || tableEmpty(5,"尚無用戶"); }
+    async function loadCustomers(){ const rows = await api("/api/admin/customers"); qs("#customerRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.displayName||"LINE 會員")+'</strong><div class="muted">'+esc(r.status||"active")+'</div></td><td class="mono">'+esc(r.lineUserId)+'</td><td>'+esc(r.salesName||"未綁定")+'<div class="mono">'+esc(r.salesCode||"")+'</div></td><td>'+esc(r.lastMessageAt||"尚無互動")+'<div class="muted">訊息 '+money(r.messageCount)+' 筆</div></td><td>'+esc(r.firstSeenAt||"")+'</td></tr>').join("") || tableEmpty(5,"尚無會員"); }
     async function loadProducts(){ const rows = await api("/api/products"); qs("#productRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong></td><td class="mono">'+esc(r.sku)+'</td><td>'+esc(r.category||"")+'</td><td>'+money(r.price)+'</td><td>'+money(r.stockQty)+' / '+money(r.safetyStockQty)+'</td><td>'+badge(r.status||"active", Number(r.stockQty) <= Number(r.safetyStockQty) ? "warn" : "")+'</td></tr>').join("") || tableEmpty(6,"尚無商品"); }
     async function loadMessages(){ const rows = await api("/api/admin/line-messages"); const html = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); qs("#messageRows").innerHTML = html; qs("#dashboardMessages").innerHTML = rows.slice(0,6).map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); }
     async function loadWebhooks(){ const rows = await api("/api/admin/webhooks"); qs("#webhookRows").innerHTML = rows.map(r => { const s = r.summary || {}; const tone = s.invalidSignature ? "danger" : (s.hasReplyPayload ? "" : "warn"); const label = s.invalidSignature ? "簽章錯誤" : (s.hasReplyPayload ? "有回覆" : "已轉送"); const detail = s.contentType || "無 content-type"; return '<tr><td>'+esc(r.createdAt)+'</td><td>'+esc(r.source)+'</td><td class="summary-text">'+esc(r.messageText||"")+'</td><td>'+esc(r.motherStatus||"")+'</td><td>'+badge(label,tone)+'<div class="muted">'+esc(detail)+'</div></td></tr>'; }).join("") || tableEmpty(5,"尚無紀錄"); }
