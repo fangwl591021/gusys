@@ -126,7 +126,7 @@ async function forwardToMotherWebhook(env, rawBody, signature) {
     };
   }
 
-  const mode = String(env.MOTHER_WEBHOOK_MODE || "action").toLowerCase();
+  const mode = String(env.MOTHER_WEBHOOK_MODE || "raw").toLowerCase();
   const lineBody = parseJson(rawBody, {});
   const body = mode === "raw"
     ? rawBody
