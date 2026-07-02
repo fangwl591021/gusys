@@ -95,6 +95,12 @@ async function handleLineWebhook(request, env, ctx) {
 
   const motherResult = await forwardToMotherWebhook(env, rawBody, signature);
 
+  if (env.DB) {
+    ctx.waitUntil(recordMotherForwardResult(env, events, motherResult).catch(error => {
+      console.error(JSON.stringify({ level: "error", message: "record_mother_forward_failed", error: String(error?.message || error) }));
+    }));
+  }
+
   await recordWebhookDebug(env, "LINE_WEBHOOK_LAST", {
     eventCount: events.length,
     motherStatus: motherResult.status,
@@ -102,8 +108,9 @@ async function handleLineWebhook(request, env, ctx) {
     receivedAt: new Date().toISOString(),
   });
 
-  if (motherResult.replyPayload && env.LINE_CHANNEL_ACCESS_TOKEN) {
-    const replyResult = await replyLineMessage(env, motherResult.replyPayload);
+  const replyPayload = motherResult.replyPayload || buildLocalKeywordReplyPayload(events, env);
+  if (replyPayload && env.LINE_CHANNEL_ACCESS_TOKEN) {
+    const replyResult = await replyLineMessage(env, replyPayload);
     return json({ ok: true, mother: motherResult.summary, reply: replyResult });
   }
 
@@ -156,6 +163,8 @@ async function forwardToMotherWebhook(env, rawBody, signature) {
         status: response.status,
         elapsedMs: Date.now() - startedAt,
         hasReplyPayload: Boolean(extractReplyPayload(parsed)),
+        contentType: response.headers.get("content-type") || "",
+        bodyPreview: text.slice(0, 800),
       },
     };
   } catch (error) {
@@ -174,6 +183,31 @@ async function forwardToMotherWebhook(env, rawBody, signature) {
   }
 }
 
+function buildLocalKeywordReplyPayload(events, env) {
+  const event = Array.isArray(events) ? events.find(item => item?.replyToken && item?.message?.type === "text") : null;
+  if (!event) return null;
+
+  const text = String(event.message?.text || "").trim();
+  if (!text) return null;
+
+  if (text.includes("會員專區")) {
+    const url = env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || env.GAS_URL || env.MOTHER_WEBHOOK_URL || "https://aiwe.cc/index.php/line_login/10279/";
+    return {
+      replyToken: event.replyToken,
+      messages: [{ type: "text", text: `會員專區\n${url}` }],
+    };
+  }
+
+  if (text.includes("點數") || text.includes("點數管理")) {
+    const url = env.POINTS_PAGE_URL || "https://aiwe.cc/index.php/linecard_16/10281/";
+    return {
+      replyToken: event.replyToken,
+      messages: [{ type: "text", text: `點數管理\n${url}` }],
+    };
+  }
+
+  return null;
+}
 function extractReplyPayload(value) {
   if (!value || typeof value !== "object") return null;
   if (value.replyPayload) return value.replyPayload;
@@ -248,6 +282,23 @@ async function recordRejectedLineEvents(env, lineBody, rawBody, reason) {
       JSON.stringify(event),
     ).run();
   }
+}
+async function recordMotherForwardResult(env, events, motherResult) {
+  const event = Array.isArray(events) && events.length ? events[0] : {};
+  const lineUserId = String(event.source?.userId || "");
+  const text = lineEventText(event);
+  const summary = motherResult?.summary || {};
+  await env.DB.prepare(`
+    INSERT INTO webhook_events (
+      id, source, line_user_id, event_type, message_text, mother_status, handled_by_gusys, raw_json
+    ) VALUES (?, 'mother', ?, 'mother_forward', ?, ?, 0, ?)
+  `).bind(
+    crypto.randomUUID(),
+    lineUserId,
+    text,
+    Number(motherResult?.status || 0),
+    JSON.stringify(summary).slice(0, 5000),
+  ).run();
 }
 async function recordLineEvents(env, events, rawBody) {
   for (const event of events) {
