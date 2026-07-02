@@ -184,6 +184,7 @@ async function forwardToMotherWebhook(env, rawBody, signature) {
 }
 
 function buildLocalKeywordReplyPayload(events, env) {
+  if (String(env.MOTHER_FALLBACK_REPLY_ENABLED || "false").toLowerCase() !== "true") return null;
   const event = Array.isArray(events) ? events.find(item => item?.replyToken && item?.message?.type === "text") : null;
   if (!event) return null;
 
