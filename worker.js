@@ -123,7 +123,7 @@ function isLineVerifyProbe(body) {
   return body.events.length === 0;
 }
 async function forwardToMotherWebhook(env, rawBody, signature) {
-  const targetUrl = env.GAS_URL || env.MOTHER_WEBHOOK_URL;
+  const targetUrl = env.MOTHER_WEBHOOK_URL;
   if (!targetUrl) {
     return {
       ok: false,
@@ -192,7 +192,7 @@ function buildLocalKeywordReplyPayload(events, env) {
   if (!text) return null;
 
   if (text.includes("會員專區")) {
-    const url = env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || env.GAS_URL || env.MOTHER_WEBHOOK_URL || "https://aiwe.cc/index.php/line_login/10279/";
+    const url = env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || "https://aiwe.cc/index.php/line_login/10279/";
     return {
       replyToken: event.replyToken,
       messages: [{ type: "text", text: `會員專區\n${url}` }],
@@ -941,7 +941,7 @@ function renderHome(env) {
       <ul>
         <li>LINE Webhook URL：<code>${escapeHtml(publicUrl)}/line-webhook</code></li>
         <li>診斷頁：<code>${escapeHtml(publicUrl)}/hub-test</code></li>
-        <li>母站 webhook：<code>${escapeHtml(env.GAS_URL || env.MOTHER_WEBHOOK_URL || "")}</code></li>
+        <li>母站 webhook：<code>${escapeHtml(env.MOTHER_WEBHOOK_URL || "")}</code></li>
       </ul>
     </section>
     <section>
@@ -961,7 +961,7 @@ function renderHome(env) {
 }
 
 async function handleHubTest(env) {
-  const motherUrl = env.GAS_URL || env.MOTHER_WEBHOOK_URL || "";
+  const motherUrl = env.MOTHER_WEBHOOK_URL || "";
   const mother = motherUrl
     ? await testMotherWebhook(motherUrl)
     : { configured: false, ok: false, status: 0 };
@@ -974,7 +974,6 @@ async function handleHubTest(env) {
       DB: Boolean(env.DB),
       LINE_CHANNEL_SECRET: Boolean(env.LINE_CHANNEL_SECRET),
       LINE_CHANNEL_ACCESS_TOKEN: Boolean(env.LINE_CHANNEL_ACCESS_TOKEN),
-      GAS_URL: Boolean(env.GAS_URL),
       MOTHER_WEBHOOK_URL: Boolean(env.MOTHER_WEBHOOK_URL),
       WETW_API_KEY: Boolean(env.WETW_API_KEY),
       WETW_SHOP_ID: Boolean(env.WETW_SHOP_ID),

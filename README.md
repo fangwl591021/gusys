@@ -25,15 +25,20 @@ future orders and reports use that binding to attribute sales.
 
 ## Mother webhook
 
-The mother-site webhook is configured in `wrangler.toml`:
+The mother-site webhook is a WordPress endpoint, not Google Apps Script:
 
 ```text
-https://aiwe.cc/index.php/line_login/10279/
+MOTHER_WEBHOOK_URL=https://aiwe.cc/index.php/line_login/10279/
 ```
 
 `/line-webhook` verifies the LINE signature, records Gusys events when D1 is
-bound, forwards the payload to the mother webhook, then sends the mother
-`replyPayload` through the LINE Reply API when provided.
+bound, and forwards the original LINE webhook body to `MOTHER_WEBHOOK_URL` using
+`MOTHER_WEBHOOK_MODE=raw`.
+
+If the mother webhook returns a JSON `replyPayload`, Gusys sends it through the
+LINE Reply API. If the mother site handles replies internally and returns HTML,
+Gusys records the mother response for diagnostics and does not send a fallback
+reply unless `MOTHER_FALLBACK_REPLY_ENABLED=true` is explicitly configured.
 
 ## Secrets
 
