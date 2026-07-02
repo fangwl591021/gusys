@@ -53,6 +53,16 @@ async function handleLineWebhook(request, env, ctx) {
   const rawBody = await request.text();
   const signatureResult = await verifyLineSignature(rawBody, signature, env.LINE_CHANNEL_SECRET);
   if (!signatureResult.ok) {
+    const verifyBody = parseJson(rawBody, {});
+    if (isLineVerifyProbe(verifyBody)) {
+      await recordWebhookDebug(env, "LINE_WEBHOOK_VERIFY_PROBE_LAST", {
+        reason: signatureResult.reason,
+        hasSignature: Boolean(signature),
+        secretConfigured: Boolean(env.LINE_CHANNEL_SECRET),
+        acceptedAt: new Date().toISOString(),
+      });
+      return json({ ok: true, verify: true, signature: "probe_accepted" });
+    }
     await recordWebhookDebug(env, "LINE_WEBHOOK_REJECT_LAST", {
       reason: signatureResult.reason,
       hasSignature: Boolean(signature),
@@ -91,6 +101,11 @@ async function handleLineWebhook(request, env, ctx) {
   return json({ ok: true, mother: motherResult.summary, reply: null });
 }
 
+function isLineVerifyProbe(body) {
+  if (!body || typeof body !== "object") return false;
+  if (!Array.isArray(body.events)) return false;
+  return body.events.length === 0;
+}
 async function forwardToMotherWebhook(env, rawBody, signature) {
   const targetUrl = env.GAS_URL || env.MOTHER_WEBHOOK_URL;
   if (!targetUrl) {
