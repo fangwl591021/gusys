@@ -786,6 +786,19 @@ async function listSalesReps(env) {
     LIMIT 200
   `).all();
   const rows = results || [];
+  for (const row of rows) {
+    const freshInviteUrl = buildSalesInviteUrl(env, row.salesCode);
+    const freshQrUrl = buildQrUrl(freshInviteUrl);
+    if (row.inviteUrl !== freshInviteUrl || row.qrUrl !== freshQrUrl) {
+      await env.DB.prepare(`
+        UPDATE sales_reps
+        SET invite_url = ?, qr_url = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(freshInviteUrl, freshQrUrl, row.id).run();
+      row.inviteUrl = freshInviteUrl;
+      row.qrUrl = freshQrUrl;
+    }
+  }
   const { results: crmSales } = await env.DB.prepare(`
     SELECT c.line_user_id AS lineUserId, c.display_name AS displayName, c.phone,
            c.created_at AS createdAt, c.updated_at AS updatedAt, sr.id AS salesRepId
@@ -1827,10 +1840,12 @@ async function recordWebhookDebug(env, key, value) {
 }
 
 function buildSalesInviteUrl(env, salesCode) {
-  const base = String(env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev").replace(/\/+$/, "");
-  const url = new URL(`${base}/sales/invite`);
+  const workerBase = String(env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev").replace(/\/+$/, "");
+  const motherEntry = String(env.MOTHER_SALES_ENTRY_URL || env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || "https://aiwe.cc/index.php/line_login/10279/").trim();
+  const url = new URL(motherEntry || `${workerBase}/sales/invite`);
   url.searchParams.set("sales", salesCode);
   url.searchParams.set("source", "sales_qr");
+  url.searchParams.set("gusys_bind", `${workerBase}/api/sales/bind`);
   return url.toString();
 }
 
