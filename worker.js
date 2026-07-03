@@ -674,6 +674,83 @@ function requireAdmin(request, env) {
   const provided = request.headers.get("x-admin-token") || url.searchParams.get("token") || "";
   if (provided !== token) throw new HttpError(401, "admin_unauthorized");
 }
+function crmSalesCode(lineUserId) {
+  return normalizeSalesCode(`CRM-${String(lineUserId || "").trim().slice(-10)}`);
+}
+
+async function ensureCrmSalesRep(env, customer) {
+  const lineUserId = String(customer.lineUserId || customer.line_user_id || "").trim();
+  if (!lineUserId) return null;
+  const existing = await env.DB.prepare(`
+    SELECT id, sales_code AS salesCode, name, line_user_id AS lineUserId,
+           phone, status, invite_url AS inviteUrl, qr_url AS qrUrl,
+           created_at AS createdAt, updated_at AS updatedAt
+    FROM sales_reps
+    WHERE line_user_id = ?
+    LIMIT 1
+  `).bind(lineUserId).first();
+  if (existing) return existing;
+  const salesCode = crmSalesCode(lineUserId);
+  const inviteUrl = buildSalesInviteUrl(env, salesCode);
+  const qrUrl = buildQrUrl(inviteUrl);
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO sales_reps (
+      id, company_id, sales_code, name, line_user_id, phone, status,
+      invite_url, qr_url, created_at, updated_at
+    ) VALUES (?, 'default', ?, ?, ?, ?, 'active', ?, ?, datetime('now'), datetime('now'))
+  `).bind(
+    crypto.randomUUID(),
+    salesCode,
+    String(customer.displayName || customer.display_name || lineUserId).trim() || lineUserId,
+    lineUserId,
+    String(customer.phone || "").trim(),
+    inviteUrl,
+    qrUrl,
+  ).run();
+  return env.DB.prepare(`
+    SELECT id, sales_code AS salesCode, name, line_user_id AS lineUserId,
+           phone, status, invite_url AS inviteUrl, qr_url AS qrUrl,
+           created_at AS createdAt, updated_at AS updatedAt
+    FROM sales_reps
+    WHERE line_user_id = ?
+    LIMIT 1
+  `).bind(lineUserId).first();
+}
+
+async function syncCrmSalesCustomersToSalesReps(env) {
+  const { results } = await env.DB.prepare(`
+    SELECT c.line_user_id AS lineUserId, c.display_name AS displayName, c.phone
+    FROM customers c
+    LEFT JOIN sales_reps sr ON sr.line_user_id = c.line_user_id
+    WHERE c.customer_type = 'sales'
+      AND c.status = 'active'
+      AND c.line_user_id <> ''
+      AND sr.id IS NULL
+    ORDER BY c.updated_at DESC
+    LIMIT 200
+  `).all();
+  for (const customer of results || []) {
+    const lineUserId = String(customer.lineUserId || '').trim();
+    if (!lineUserId) continue;
+    const salesCode = crmSalesCode(lineUserId);
+    const inviteUrl = buildSalesInviteUrl(env, salesCode);
+    const qrUrl = buildQrUrl(inviteUrl);
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO sales_reps (
+        id, company_id, sales_code, name, line_user_id, phone, status,
+        invite_url, qr_url, created_at, updated_at
+      ) VALUES (?, 'default', ?, ?, ?, ?, 'active', ?, ?, datetime('now'), datetime('now'))
+    `).bind(
+      crypto.randomUUID(),
+      salesCode,
+      String(customer.displayName || lineUserId).trim() || lineUserId,
+      lineUserId,
+      String(customer.phone || '').trim(),
+      inviteUrl,
+      qrUrl,
+    ).run();
+  }
+}
 async function createSalesRep(request, env) {
   requireDb(env);
   const payload = await request.json().catch(() => ({}));
@@ -699,6 +776,7 @@ async function createSalesRep(request, env) {
 
 async function listSalesReps(env) {
   requireDb(env);
+  await syncCrmSalesCustomersToSalesReps(env);
   const { results } = await env.DB.prepare(`
     SELECT id, sales_code AS salesCode, name, line_user_id AS lineUserId,
            phone, status, invite_url AS inviteUrl, qr_url AS qrUrl,
@@ -707,7 +785,38 @@ async function listSalesReps(env) {
     ORDER BY created_at DESC
     LIMIT 200
   `).all();
-  return json({ ok: true, data: results || [] });
+  const rows = results || [];
+  const { results: crmSales } = await env.DB.prepare(`
+    SELECT c.line_user_id AS lineUserId, c.display_name AS displayName, c.phone,
+           c.created_at AS createdAt, c.updated_at AS updatedAt, sr.id AS salesRepId
+    FROM customers c
+    LEFT JOIN sales_reps sr ON sr.line_user_id = c.line_user_id
+    WHERE c.customer_type = 'sales'
+      AND c.status = 'active'
+      AND c.line_user_id <> ''
+    ORDER BY c.updated_at DESC
+    LIMIT 200
+  `).all();
+  const known = new Set(rows.map(row => String(row.lineUserId || '')));
+  for (const customer of crmSales || []) {
+    if (known.has(String(customer.lineUserId || ''))) continue;
+    const salesCode = crmSalesCode(customer.lineUserId);
+    const inviteUrl = buildSalesInviteUrl(env, salesCode);
+    rows.push({
+      id: `crm_${customer.lineUserId}`,
+      salesCode,
+      name: customer.displayName || customer.lineUserId,
+      lineUserId: customer.lineUserId,
+      phone: customer.phone || '',
+      status: 'active',
+      inviteUrl,
+      qrUrl: buildQrUrl(inviteUrl),
+      createdAt: customer.createdAt || customer.updatedAt || '',
+      updatedAt: customer.updatedAt || '',
+      source: 'crm',
+    });
+  }
+  return json({ ok: true, data: rows });
 }
 
 async function bindCustomerToSalesRep(request, env) {
@@ -770,12 +879,30 @@ async function bindCustomerBySalesCode(env, input) {
   if (!lineUserId) throw new Error("missing_line_user_id");
   if (!salesCode) throw new Error("missing_sales_code");
 
-  const salesRep = await env.DB.prepare(`
+  let salesRep = await env.DB.prepare(`
     SELECT id, sales_code, name
     FROM sales_reps
     WHERE sales_code = ? AND status = 'active'
     LIMIT 1
   `).bind(salesCode).first();
+  if (!salesRep) {
+    const { results: crmSales } = await env.DB.prepare(`
+      SELECT line_user_id AS lineUserId, display_name AS displayName, phone
+      FROM customers
+      WHERE customer_type = 'sales' AND status = 'active' AND line_user_id <> ''
+      LIMIT 200
+    `).all();
+    const crmCustomer = (crmSales || []).find(customer => crmSalesCode(customer.lineUserId) === salesCode);
+    if (crmCustomer) {
+      await ensureCrmSalesRep(env, crmCustomer);
+      salesRep = await env.DB.prepare(`
+        SELECT id, sales_code, name
+        FROM sales_reps
+        WHERE sales_code = ? AND status = 'active'
+        LIMIT 1
+      `).bind(salesCode).first();
+    }
+  }
   if (!salesRep) throw new Error("sales_rep_not_found");
 
   const existingCustomer = await env.DB.prepare(`
