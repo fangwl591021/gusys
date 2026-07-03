@@ -39,6 +39,10 @@ export default {
       if (url.pathname === "/api/points/list" && request.method === "GET") return listMemberPoints(request, env);
       if (url.pathname === "/api/ai-monitor/analyze" && request.method === "POST") return analyzeLineMonitor(request, env);
       if (url.pathname === "/api/ai-monitor/insights" && request.method === "GET") return listAiMonitorInsights(request, env);
+      if (url.pathname === "/api/admin/rich-menus" && request.method === "GET") return listRichMenus(request, env);
+      if (url.pathname === "/api/admin/rich-menus" && request.method === "POST") return saveRichMenu(request, env);
+      if (url.pathname === "/api/admin/rich-menus" && request.method === "DELETE") return deleteRichMenu(request, env);
+      if (url.pathname === "/api/admin/rich-menus/deploy" && request.method === "POST") return deployRichMenu(request, env);
       if (url.pathname === "/api/reports/monthly-sales" && request.method === "GET") return monthlySalesReport(request, env);
 
       return json({ ok: false, error: "not_found", path: url.pathname }, 404);
@@ -1123,6 +1127,187 @@ function aiMonitorConfig(env) {
 function splitCsv(value) {
   return String(value || "").split(",").map(item => item.trim()).filter(Boolean);
 }
+async function listRichMenus(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const { results } = await env.DB.prepare(`
+    SELECT id, name, alias_id AS aliasId, chat_bar_text AS chatBarText,
+           config_json AS configJson, image_data_url AS imageDataUrl,
+           line_rich_menu_id AS lineRichMenuId, status, deployed_at AS deployedAt,
+           created_at AS createdAt, updated_at AS updatedAt
+    FROM rich_menus
+    ORDER BY updated_at DESC
+    LIMIT 100
+  `).all();
+  return json({ ok: true, data: (results || []).map(row => ({
+    ...row,
+    config: parseJson(row.configJson || "{}", {}),
+    hasImage: Boolean(row.imageDataUrl),
+  })) });
+}
+
+async function saveRichMenu(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const id = String(payload.id || crypto.randomUUID()).trim();
+  const name = String(payload.name || "Gusys 圖文選單").trim();
+  const aliasId = normalizeRichMenuAliasId(payload.aliasId || name || id);
+  const chatBarText = String(payload.chatBarText || payload.config?.chatBarText || "Gusys 選單").trim();
+  const config = normalizeGusysRichMenuConfig(payload.config || parseJson(payload.configJson || "{}", {}), { name, chatBarText, aliasId });
+  const imageDataUrl = String(payload.imageDataUrl || payload.image || "").trim();
+  await env.DB.prepare(`
+    INSERT INTO rich_menus (
+      id, name, alias_id, chat_bar_text, config_json, image_data_url, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'draft', datetime('now'), datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      alias_id = excluded.alias_id,
+      chat_bar_text = excluded.chat_bar_text,
+      config_json = excluded.config_json,
+      image_data_url = excluded.image_data_url,
+      status = CASE WHEN rich_menus.status = 'deployed' THEN 'updated' ELSE rich_menus.status END,
+      updated_at = datetime('now')
+  `).bind(id, name, aliasId, chatBarText, JSON.stringify(config), imageDataUrl).run();
+  const row = await getRichMenuById(env, id);
+  return json({ ok: true, data: row });
+}
+
+async function deleteRichMenu(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const url = new URL(request.url);
+  const id = String(url.searchParams.get("id") || "").trim();
+  if (!id) return json({ ok: false, error: "missing_rich_menu_id" }, 400);
+  await env.DB.prepare(`DELETE FROM rich_menus WHERE id = ?`).bind(id).run();
+  return json({ ok: true, data: { id } });
+}
+
+async function deployRichMenu(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const token = String(env.LINE_CHANNEL_ACCESS_TOKEN || "").trim();
+  if (!token) return json({ ok: false, error: "line_channel_access_token_missing" }, 400);
+  const payload = await request.json().catch(() => ({}));
+  const id = String(payload.id || "").trim();
+  const saved = id ? await getRichMenuById(env, id) : null;
+  const name = String(payload.name || saved?.name || "Gusys 圖文選單").trim();
+  const aliasId = normalizeRichMenuAliasId(payload.aliasId || saved?.aliasId || name);
+  const chatBarText = String(payload.chatBarText || saved?.chatBarText || "Gusys 選單").trim();
+  const config = normalizeGusysRichMenuConfig(payload.config || saved?.config || {}, { name, chatBarText, aliasId });
+  const imageDataUrl = String(payload.imageDataUrl || saved?.imageDataUrl || "").trim();
+  if (!imageDataUrl) return json({ ok: false, error: "rich_menu_image_required" }, 400);
+
+  const createRes = await fetch("https://api.line.me/v2/bot/richmenu", {
+    method: "POST",
+    headers: { "authorization": `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  const createText = await createRes.text();
+  if (!createRes.ok) return json({ ok: false, error: "line_rich_menu_create_failed", detail: createText }, 400);
+  const richMenuId = parseJson(createText, {}).richMenuId;
+
+  const image = parseDataUrlImage(imageDataUrl);
+  if (!image) return json({ ok: false, error: "invalid_rich_menu_image" }, 400);
+  const uploadRes = await fetch(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, {
+    method: "POST",
+    headers: { "authorization": `Bearer ${token}`, "content-type": image.contentType },
+    body: image.bytes,
+  });
+  const uploadText = await uploadRes.text();
+  if (!uploadRes.ok) return json({ ok: false, error: "line_rich_menu_image_upload_failed", detail: uploadText }, 400);
+
+  const defaultRes = await fetch(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, {
+    method: "POST",
+    headers: { "authorization": `Bearer ${token}` },
+  });
+  const defaultText = await defaultRes.text();
+  if (!defaultRes.ok) return json({ ok: false, error: "line_rich_menu_default_failed", detail: defaultText }, 400);
+
+  const richMenuAliasId = aliasId ? await upsertGusysRichMenuAlias(token, aliasId, richMenuId) : "";
+  if (id) {
+    await env.DB.prepare(`
+      UPDATE rich_menus
+      SET line_rich_menu_id = ?, alias_id = ?, status = 'deployed', deployed_at = datetime('now'), updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(richMenuId, richMenuAliasId || aliasId, id).run();
+  }
+  return json({ ok: true, data: { richMenuId, richMenuAliasId } });
+}
+
+async function getRichMenuById(env, id) {
+  const row = await env.DB.prepare(`
+    SELECT id, name, alias_id AS aliasId, chat_bar_text AS chatBarText,
+           config_json AS configJson, image_data_url AS imageDataUrl,
+           line_rich_menu_id AS lineRichMenuId, status, deployed_at AS deployedAt,
+           created_at AS createdAt, updated_at AS updatedAt
+    FROM rich_menus
+    WHERE id = ?
+    LIMIT 1
+  `).bind(id).first();
+  if (!row) return null;
+  return { ...row, config: parseJson(row.configJson || "{}", {}), hasImage: Boolean(row.imageDataUrl) };
+}
+
+function normalizeRichMenuAliasId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32);
+}
+
+function normalizeGusysRichMenuConfig(config, meta = {}) {
+  const base = config && typeof config === "object" ? { ...config } : {};
+  base.size = base.size || { width: 2500, height: 1686 };
+  base.selected = base.selected !== false;
+  base.name = String(base.name || meta.name || "Gusys Rich Menu").slice(0, 300);
+  base.chatBarText = String(base.chatBarText || meta.chatBarText || "Gusys 選單").slice(0, 14);
+  base.areas = Array.isArray(base.areas) ? base.areas : defaultGusysRichMenuAreas();
+  return base;
+}
+
+function defaultGusysRichMenuAreas() {
+  const w = 2500;
+  const h = 1686;
+  const col = Math.floor(w / 3);
+  const row = Math.floor(h / 2);
+  const labels = ["會員分享", "業務綁定", "點數查詢", "商品目錄", "訂單查詢", "聯絡客服"];
+  return labels.map((label, i) => ({
+    bounds: { x: (i % 3) * col, y: Math.floor(i / 3) * row, width: i % 3 === 2 ? w - col * 2 : col, height: row },
+    action: { type: "message", text: label },
+  }));
+}
+
+function parseDataUrlImage(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:(image\/(?:png|jpeg|jpg));base64,([A-Za-z0-9+/=\r\n]+)$/i);
+  if (!match) return null;
+  const contentType = match[1].toLowerCase() === "image/jpg" ? "image/jpeg" : match[1].toLowerCase();
+  const binary = atob(match[2].replace(/\s+/g, ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return { contentType, bytes };
+}
+
+async function upsertGusysRichMenuAlias(token, aliasId, richMenuId) {
+  const normalized = normalizeRichMenuAliasId(aliasId);
+  if (!normalized || !richMenuId) return "";
+  const payload = JSON.stringify({ richMenuAliasId: normalized, richMenuId });
+  const createRes = await fetch("https://api.line.me/v2/bot/richmenu/alias", {
+    method: "POST",
+    headers: { "authorization": `Bearer ${token}`, "content-type": "application/json" },
+    body: payload,
+  });
+  if (createRes.ok) return normalized;
+  const updateRes = await fetch(`https://api.line.me/v2/bot/richmenu/alias/${encodeURIComponent(normalized)}`, {
+    method: "POST",
+    headers: { "authorization": `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ richMenuId }),
+  });
+  if (!updateRes.ok) throw new Error(await updateRes.text());
+  return normalized;
+}
 async function monthlySalesReport(request, env) {
   requireDb(env);
   const url = new URL(request.url);
@@ -1445,7 +1630,7 @@ function renderHookteaAdminPage(env) {
     .main-content{margin-left:240px;min-height:100vh}.page-header{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.96);border-bottom:1px solid var(--border);padding:14px 22px;display:flex;align-items:center;justify-content:space-between;gap:16px}.page-title{font-size:21px;font-weight:800}.page-subtitle{margin-top:3px;color:var(--muted)}.header-actions{display:flex;align-items:center;gap:8px}.content{padding:20px 22px 36px;max-width:1280px}.view{display:none}.view.active{display:block}
     .stats-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:14px}.stat-card,.panel{background:#fff;border:1px solid var(--border);border-radius:8px}.stat-card{padding:16px}.stat-label{color:var(--muted);font-size:13px}.stat-value{font-size:30px;font-weight:800;margin-top:8px}.panel{margin-bottom:14px;overflow:hidden}.panel-header{padding:13px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px}.section-title{font-size:16px;font-weight:800}.panel-body{padding:16px}.admin-table-container{overflow:auto}.admin-table{width:100%;border-collapse:collapse;min-width:760px}.admin-table th,.admin-table td{padding:11px 12px;border-bottom:1px solid #edf0f3;text-align:left;vertical-align:top}.admin-table th{background:#fafafa;color:#667085;font-size:12px;font-weight:800}.admin-table tr:hover td{background:#fbfbfb}
     .form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}input{border:1px solid #d1d5db;border-radius:8px;background:#fff;padding:10px 11px;min-width:0}.btn-green-main{border:1px solid #079447;background:var(--line);color:#fff;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer}.btn-outline{border:1px solid #d1d5db;background:#fff;color:#111827;border-radius:8px;padding:10px 14px;cursor:pointer}.btn-small{padding:7px 10px;border-radius:7px}.status-badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;background:#ecfdf3;color:#067647;font-size:12px;font-weight:800}.status-badge.warn{background:#fffaeb;color:var(--warn)}.status-badge.danger{background:#fef2f2;color:var(--danger)}.muted{color:var(--muted)}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}.empty{padding:24px;text-align:center;color:var(--muted)}.ops-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ops-item{border:1px solid var(--border);border-radius:8px;padding:14px;background:#fff}.ops-label{color:var(--muted);font-size:13px}.ops-value{margin-top:6px;font-weight:800;word-break:break-all}.qr{width:76px;height:76px;border:1px solid var(--border);border-radius:8px;background:#fff}.summary-text{max-width:360px;white-space:normal;word-break:break-word}.login-cover{position:fixed;inset:0;background:rgba(17,24,39,.34);z-index:50;display:none;align-items:center;justify-content:center;padding:18px}.login-box{width:min(420px,100%);background:#fff;border-radius:10px;border:1px solid var(--border);padding:20px}.login-title{font-size:20px;font-weight:800;margin-bottom:6px}.login-box input{width:100%;margin:14px 0 10px}
-    .crm-toolbar{padding:18px 0;display:flex;align-items:center;gap:14px;border-bottom:1px solid #eef2f7}.crm-search{width:min(480px,100%);font-weight:800;color:#334155}.member-cell{display:flex;align-items:center;gap:14px}.member-avatar{width:50px;height:50px;border-radius:999px;background:#f1f5f9;border:1px solid #dbe3ee;display:inline-flex;align-items:center;justify-content:center;color:#64748b;font-weight:900;overflow:hidden;object-fit:cover}.member-name{font-size:16px;font-weight:900;color:#0f172a}.crm-action{background:#eff6ff;color:#1d4ed8;border:0;border-radius:6px;padding:8px 13px;font-weight:900;cursor:pointer}.tier-badge{display:inline-flex;padding:6px 10px;border-radius:6px;background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;font-weight:900}.crm-modal-mask{position:fixed;inset:0;background:rgba(15,23,42,.32);z-index:100;display:none;align-items:flex-start;justify-content:center;overflow:auto}.crm-modal-body{width:min(1180px,calc(100vw - 36px));margin:18px auto;background:#f8fafc;border-radius:0 0 10px 10px;box-shadow:0 24px 60px rgba(15,23,42,.24);overflow:hidden}.crm-modal-header{height:90px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;padding:0 28px}.crm-modal-title{display:flex;align-items:center;gap:14px;font-size:24px;font-weight:900}.crm-member-id{font-size:13px;background:#f1f5f9;border:1px solid #dbe3ee;border-radius:10px;padding:9px 14px;color:#64748b;font-weight:900}.crm-close{border:0;background:transparent;color:#94a3b8;font-size:36px;line-height:1;cursor:pointer}.crm-modal-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(360px,.8fr);gap:38px;padding:40px}.crm-card{background:#fff;border:1px solid #dbe3ee;border-radius:18px;box-shadow:0 1px 2px rgba(15,23,42,.04);overflow:hidden}.crm-card-body{padding:30px}.crm-card-title{font-size:22px;font-weight:900;margin-bottom:20px;color:#172033}.crm-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px 24px}.crm-label{display:block;color:#64748b;font-weight:900;margin-bottom:8px}.crm-input{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:14px 16px;font-weight:900;color:#0f172a}.crm-tag-grid{border:1px solid #dbe3ee;background:#f8fafc;border-radius:14px;padding:14px;display:flex;gap:10px;flex-wrap:wrap}.crm-tag{border:1px solid #dbe3ee;background:#fff;border-radius:999px;padding:8px 14px;font-weight:900;color:#334155}.point-summary{text-align:center;position:relative;padding:32px}.point-label{font-weight:900;color:#94a3b8}.point-balance{font-size:52px;font-weight:900;color:#dc2626;margin:14px 0 26px}.point-actions{display:flex;gap:14px}.point-btn{flex:1;border-radius:12px;padding:16px;border:1px solid;font-weight:900;cursor:pointer}.point-add{background:#ecfdf3;border-color:#bbf7d0;color:#16a34a}.point-deduct{background:#fff1f2;border-color:#fecdd3;color:#dc2626}.point-history{height:318px;overflow:auto}.point-log{display:flex;justify-content:space-between;gap:16px;padding:18px 24px;border-bottom:1px solid #eef2f7}.point-log-title{font-weight:900;color:#1e293b}.point-log-date{font-size:12px;color:#94a3b8;margin-top:4px}.point-log-amt{font-size:20px;font-weight:900}.crm-modal-footer{background:#fff;border-top:1px solid #e2e8f0;padding:24px 34px;display:flex;justify-content:flex-end;gap:24px}.crm-save{min-width:230px;box-shadow:0 16px 30px rgba(6,199,85,.22)}
+    .crm-toolbar{padding:18px 0;display:flex;align-items:center;gap:14px;border-bottom:1px solid #eef2f7}.crm-search{width:min(480px,100%);font-weight:800;color:#334155}.member-cell{display:flex;align-items:center;gap:14px}.member-avatar{width:50px;height:50px;border-radius:999px;background:#f1f5f9;border:1px solid #dbe3ee;display:inline-flex;align-items:center;justify-content:center;color:#64748b;font-weight:900;overflow:hidden;object-fit:cover}.member-name{font-size:16px;font-weight:900;color:#0f172a}.crm-action{background:#eff6ff;color:#1d4ed8;border:0;border-radius:6px;padding:8px 13px;font-weight:900;cursor:pointer}.tier-badge{display:inline-flex;padding:6px 10px;border-radius:6px;background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;font-weight:900}.crm-modal-mask{position:fixed;inset:0;background:rgba(15,23,42,.32);z-index:100;display:none;align-items:flex-start;justify-content:center;overflow:auto}.crm-modal-body{width:min(1180px,calc(100vw - 36px));margin:18px auto;background:#f8fafc;border-radius:0 0 10px 10px;box-shadow:0 24px 60px rgba(15,23,42,.24);overflow:hidden}.crm-modal-header{height:90px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;padding:0 28px}.crm-modal-title{display:flex;align-items:center;gap:14px;font-size:24px;font-weight:900}.crm-member-id{font-size:13px;background:#f1f5f9;border:1px solid #dbe3ee;border-radius:10px;padding:9px 14px;color:#64748b;font-weight:900}.crm-close{border:0;background:transparent;color:#94a3b8;font-size:36px;line-height:1;cursor:pointer}.crm-modal-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(360px,.8fr);gap:38px;padding:40px}.crm-card{background:#fff;border:1px solid #dbe3ee;border-radius:18px;box-shadow:0 1px 2px rgba(15,23,42,.04);overflow:hidden}.crm-card-body{padding:30px}.crm-card-title{font-size:22px;font-weight:900;margin-bottom:20px;color:#172033}.crm-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px 24px}.crm-label{display:block;color:#64748b;font-weight:900;margin-bottom:8px}.crm-input{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:14px 16px;font-weight:900;color:#0f172a}.crm-tag-grid{border:1px solid #dbe3ee;background:#f8fafc;border-radius:14px;padding:14px;display:flex;gap:10px;flex-wrap:wrap}.crm-tag{border:1px solid #dbe3ee;background:#fff;border-radius:999px;padding:8px 14px;font-weight:900;color:#334155}.point-summary{text-align:center;position:relative;padding:32px}.point-label{font-weight:900;color:#94a3b8}.point-balance{font-size:52px;font-weight:900;color:#dc2626;margin:14px 0 26px}.point-actions{display:flex;gap:14px}.point-btn{flex:1;border-radius:12px;padding:16px;border:1px solid;font-weight:900;cursor:pointer}.point-add{background:#ecfdf3;border-color:#bbf7d0;color:#16a34a}.point-deduct{background:#fff1f2;border-color:#fecdd3;color:#dc2626}.point-history{height:318px;overflow:auto}.point-log{display:flex;justify-content:space-between;gap:16px;padding:18px 24px;border-bottom:1px solid #eef2f7}.point-log-title{font-weight:900;color:#1e293b}.point-log-date{font-size:12px;color:#94a3b8;margin-top:4px}.point-log-amt{font-size:20px;font-weight:900}.crm-modal-footer{background:#fff;border-top:1px solid #e2e8f0;padding:24px 34px;display:flex;justify-content:flex-end;gap:24px}.crm-save{min-width:230px;box-shadow:0 16px 30px rgba(6,199,85,.22)}.rich-grid{display:grid;grid-template-columns:minmax(320px,.9fr) minmax(0,1.4fr);gap:16px}.rich-list{display:grid;gap:10px}.rich-item{border:1px solid var(--border);border-radius:8px;background:#fff;padding:12px;cursor:pointer}.rich-item.active{border-color:#06c755;box-shadow:0 0 0 2px #dcfce7}.rich-editor{display:grid;gap:12px}.rich-textarea{width:100%;min-height:160px;border:1px solid #cbd5e1;border-radius:8px;padding:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}.rich-preview{aspect-ratio:2500/1686;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;background:linear-gradient(135deg,#ecfdf3,#eff6ff);display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr)}.rich-preview-cell{border:1px solid rgba(15,23,42,.12);display:flex;align-items:center;justify-content:center;text-align:center;font-weight:900;color:#0f172a;background:rgba(255,255,255,.72)}.rich-actions{display:flex;flex-wrap:wrap;gap:10px}.rich-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.rich-form-grid input{width:100%}
     @media(max-width:980px){.sidebar{position:static;width:auto}.main-content{margin-left:0}.page-header{position:static;align-items:flex-start;flex-direction:column}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ops-list{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.header-actions{width:100%;flex-wrap:wrap}.header-actions input{flex:1}.crm-modal-grid{grid-template-columns:1fr;padding:18px}.crm-field-grid{grid-template-columns:1fr}.crm-modal-header{height:auto;padding:18px;align-items:flex-start}.crm-modal-title{font-size:18px}.point-actions{flex-direction:column}}
   </style>
 </head>
@@ -1462,7 +1647,7 @@ function renderHookteaAdminPage(env) {
     <section class="view" id="view-messages"><section class="panel"><div class="panel-header"><div class="section-title">LINE 訊息紀錄</div><div><button class="btn-green-main btn-small" id="runAi">AI 分析最新訊息</button> <span class="muted" id="aiRunStatus"></span></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>LINE UID</th><th>內容</th><th>Thread</th></tr></thead><tbody id="messageRows"></tbody></table></div></section></section>
     <section class="view" id="view-ai"><section class="panel"><div class="panel-header"><div class="section-title">AI 後台監控</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>風險</th><th>分類</th><th>摘要</th><th>建議動作</th></tr></thead><tbody id="aiRows"></tbody></table></div></section></section>
     <section class="view" id="view-webhooks"><section class="panel"><div class="panel-header"><div class="section-title">雙 Webhook 轉送狀態</div><span class="muted">LINE OA -> Gusys Worker -> 母站</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>來源</th><th>訊息</th><th>母站狀態</th><th>摘要</th></tr></thead><tbody id="webhookRows"></tbody></table></div></section></section>
-    <section class="view" id="view-richmenu"><section class="panel"><div class="panel-header"><div class="section-title">圖文選單</div><span class="status-badge warn">規劃中</span></div><div class="panel-body"><div class="ops-list"><div class="ops-item"><div class="ops-label">HookTea 對應功能</div><div class="ops-value">圖文選單管理、LIFF 入口、Postback 綁定</div></div><div class="ops-item"><div class="ops-label">Gusys 建議入口</div><div class="ops-value">會員分享、業務綁定、點數查詢、商品/訂單</div></div><div class="ops-item"><div class="ops-label">下一步</div><div class="ops-value">串 LINE rich menu API 與後台可視化設定</div></div></div></div></section></section>
+    <section class="view" id="view-richmenu"><section class="panel"><div class="panel-header"><div><div class="section-title">圖文選單</div><div class="muted">HookTea 模式：選單檔案庫、JSON 區域設定、圖片與 LINE 預設部署</div></div><div class="rich-actions"><button class="btn-outline btn-small" id="newRichMenu">新增預設選單</button><button class="btn-outline btn-small" id="loadRichMenus">重新整理</button><span class="muted" id="richMenuStatus"></span></div></div><div class="panel-body"><div class="rich-grid"><aside><div class="section-title" style="margin-bottom:10px">選單檔案庫</div><div class="rich-list" id="richMenuRows"></div></aside><section class="rich-editor"><div class="rich-form-grid"><input id="richMenuName" placeholder="選單名稱"><input id="richMenuAlias" placeholder="Alias ID，例如 gusys-main"><input id="richMenuChatBar" placeholder="Chat bar 文字"></div><div class="rich-preview" id="richPreview"></div><textarea id="richMenuImage" class="rich-textarea" placeholder="貼上 JPG/PNG data URL；部署到 LINE 時必填"></textarea><textarea id="richMenuJson" class="rich-textarea" placeholder="LINE Rich Menu JSON"></textarea><div class="rich-actions"><button class="btn-green-main" id="saveRichMenu">儲存選單檔案</button><button class="btn-outline" id="deployRichMenu">部署為 LINE 預設選單</button><button class="btn-outline" id="deleteRichMenu">刪除檔案</button></div></section></div></div></section></section>
     <section class="view" id="view-audit"><section class="panel"><div class="panel-header"><div class="section-title">操作紀錄</div><span class="status-badge">Webhook 事件</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>類型</th><th>目前紀錄來源</th><th>狀態</th></tr></thead><tbody><tr><td>LINE 訊息</td><td>/api/admin/line-messages</td><td>已串接</td></tr><tr><td>母站轉送</td><td>/api/admin/webhooks</td><td>已串接</td></tr><tr><td>後台操作</td><td>audit_logs</td><td>待建立</td></tr></tbody></table></div></section></section>
     <section class="view" id="view-settings"><section class="panel"><div class="panel-header"><div class="section-title">系統設定</div></div><div class="panel-body"><div class="ops-list"><div class="ops-item"><div class="ops-label">Worker</div><div class="ops-value mono">${escapeHtml(publicUrl)}</div></div><div class="ops-item"><div class="ops-label">LINE Webhook</div><div class="ops-value mono">${escapeHtml(lineWebhookUrl)}</div></div><div class="ops-item"><div class="ops-label">母站 Webhook</div><div class="ops-value mono">${escapeHtml(motherUrl)}</div></div></div><p class="muted">若有設定 ADMIN_TOKEN，後台 API 會要求輸入 token；未設定時可直接讀取。</p></div></section></section>
   </div></main><div class="crm-modal-mask" id="crmModal">
@@ -1519,7 +1704,7 @@ function renderHookteaAdminPage(env) {
   <script>
     const publicUrl = ${JSON.stringify(publicUrl)}; const motherUrl = ${JSON.stringify(motherUrl)};
     const titles = {dashboard:["營運統計","即時掌握業務、客戶、商品、LINE 訊息與母站轉送"],sales:["業務 QR","建立業務專屬 QR，作為日後業績歸屬依據"],customers:["客戶 CRM","所有加入官方帳號者自動建檔，並追蹤互動與業務歸屬"],inventory:["商城商品","管理商品、售價、成本與安全庫存"],reports:["業績報表","每月業務績效與毛利彙整"],orders:["訂單維護","HookTea 同款訂單工作區，待串接 Gusys 訂單資料表"],points:["點數總表","對接母站點數 API，集中查詢會員點數紀錄"],messages:["LINE 訊息","查詢 LINE OA 對話紀錄"],ai:["AI 後台監控","追蹤高風險訊息、分類與建議動作"],webhooks:["雙 Webhook","查看母站轉送狀態，不顯示整段 HTML 原始碼"],richmenu:["圖文選單","規劃 LINE 圖文選單與 LIFF 入口"],audit:["操作紀錄","記錄後台操作與 webhook 重要事件"],settings:["系統設定","確認 Worker、LINE Webhook 與母站 Webhook"]};
-    let adminToken = localStorage.getItem("gusys_admin_token") || ""; let adminCustomers = []; let activeCustomer = null; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
+    let adminToken = localStorage.getItem("gusys_admin_token") || ""; let adminCustomers = []; let activeCustomer = null; let richMenus = []; let activeRichMenu = null; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
     const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); const money = v => new Intl.NumberFormat("zh-TW").format(Number(v || 0));
     qs("#adminToken").value = adminToken; function headers(){ return adminToken ? {"x-admin-token":adminToken} : {}; } function badge(text,tone){ return '<span class="status-badge '+(tone||"")+'">'+esc(text)+'</span>'; }
     async function api(path,opt){ const init = opt || {}; init.headers = Object.assign({"content-type":"application/json"}, headers(), init.headers || {}); const res = await fetch(path, init); const data = await res.json().catch(() => ({ok:false,error:"bad_json"})); if(!res.ok || !data.ok){ const err = new Error(data.error || data.message || ("HTTP "+res.status)); err.status = res.status; throw err; } return data.data || data; }
@@ -1528,17 +1713,26 @@ function renderHookteaAdminPage(env) {
     qs("#saveToken").onclick = () => { adminToken = qs("#adminToken").value.trim(); localStorage.setItem("gusys_admin_token", adminToken); qs("#loginCover").style.display = "none"; loadAll(); }; qs("#loginSubmit").onclick = () => { adminToken = qs("#loginToken").value.trim(); qs("#adminToken").value = adminToken; localStorage.setItem("gusys_admin_token", adminToken); qs("#loginCover").style.display = "none"; loadAll(); }; qs("#refreshAll").onclick = () => loadAll();
     qs("#createSales").onclick = async () => { try{ await api("/api/sales/reps",{method:"POST",body:JSON.stringify({name:qs("#salesName").value,phone:qs("#salesPhone").value,lineUserId:qs("#salesLine").value,salesCode:qs("#salesCode").value})}); qs("#salesStatus").textContent = "已建立"; await Promise.all([loadSales(),loadSummary()]); }catch(err){ qs("#salesStatus").textContent = err.message; } };
     qs("#createProduct").onclick = async () => { try{ await api("/api/products",{method:"POST",body:JSON.stringify({sku:qs("#productSku").value,category:qs("#productCategory").value,name:qs("#productName").value,price:qs("#productPrice").value,cost:qs("#productCost").value,stockQty:qs("#productStock").value,safetyStockQty:qs("#productSafety").value})}); qs("#productStatus").textContent = "已建立"; await Promise.all([loadProducts(),loadSummary()]); }catch(err){ qs("#productStatus").textContent = err.message; } };
-    qs("#runAi").onclick = async () => { qs("#aiRunStatus").textContent = "分析中"; try{ await api("/api/ai-monitor/analyze",{method:"POST",body:JSON.stringify({limit:30})}); qs("#aiRunStatus").textContent = "完成"; await loadAi(); }catch(err){ qs("#aiRunStatus").textContent = err.message; } }; qs("#loadReport").onclick = () => loadReports(); qs("#customerSearch").addEventListener("input", () => renderCustomers()); qs("#crmClose").onclick = closeCrmModal; qs("#crmCancel").onclick = closeCrmModal; qs("#crmSave").onclick = closeCrmModal; qs("#syncProfiles").onclick = syncProfiles; qs("#grantPoints").onclick = () => submitPointAdjust("earn"); qs("#deductPoints").onclick = () => submitPointAdjust("spend");
+    qs("#runAi").onclick = async () => { qs("#aiRunStatus").textContent = "分析中"; try{ await api("/api/ai-monitor/analyze",{method:"POST",body:JSON.stringify({limit:30})}); qs("#aiRunStatus").textContent = "完成"; await loadAi(); }catch(err){ qs("#aiRunStatus").textContent = err.message; } }; qs("#loadReport").onclick = () => loadReports(); qs("#customerSearch").addEventListener("input", () => renderCustomers()); qs("#crmClose").onclick = closeCrmModal; qs("#crmCancel").onclick = closeCrmModal; qs("#crmSave").onclick = closeCrmModal; qs("#syncProfiles").onclick = syncProfiles; qs("#grantPoints").onclick = () => submitPointAdjust("earn"); qs("#deductPoints").onclick = () => submitPointAdjust("spend"); qs("#newRichMenu").onclick = newRichMenu; qs("#loadRichMenus").onclick = loadRichMenus; qs("#saveRichMenu").onclick = saveRichMenu; qs("#deployRichMenu").onclick = deployRichMenu; qs("#deleteRichMenu").onclick = deleteRichMenu; qs("#richMenuJson").addEventListener("input", renderRichPreview);
     function showUnauthorized(){ qs("#systemStatus").textContent = "需要 token"; qs("#systemStatus").className = "status-badge warn"; qs("#loginCover").style.display = "flex"; } function tableEmpty(cols,text){ return '<tr><td colspan="'+cols+'" class="empty">'+esc(text)+'</td></tr>'; }
     async function loadSummary(){ const s = await api("/api/admin/summary"); qs("#metrics").innerHTML = [["業務",s.sales],["用戶",s.customers],["商品",s.products],["LINE 訊息",s.messages],["母站轉送",s.webhooks],["高風險",s.highRisk]].map(i => '<div class="stat-card"><div class="stat-label">'+esc(i[0])+'</div><div class="stat-value">'+money(i[1])+'</div></div>').join(""); const latest = s.latestMother || {}; const motherState = latest.motherStatus ? "HTTP " + latest.motherStatus : "尚無紀錄"; qs("#opsSummary").innerHTML = [["Worker",publicUrl],["LINE Webhook",publicUrl+"/line-webhook"],["母站 Webhook",motherUrl],["最近母站轉送",motherState],["最近訊息",latest.messageText||"尚無"],["最近時間",latest.createdAt||"尚無"]].map(i => '<div class="ops-item"><div class="ops-label">'+esc(i[0])+'</div><div class="ops-value">'+esc(i[1])+'</div></div>').join(""); qs("#lastRefresh").textContent = new Date().toLocaleString("zh-TW"); qs("#systemStatus").textContent = "正常"; qs("#systemStatus").className = "status-badge"; }
     async function loadSales(){ const rows = await api("/api/sales/reps"); qs("#salesRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong><div class="muted">'+esc(r.phone)+'</div></td><td class="mono">'+esc(r.salesCode)+'</td><td>'+(r.qrUrl?'<img class="qr" src="'+esc(r.qrUrl)+'" alt="QR">':"-")+'</td><td><a href="'+esc(r.inviteUrl)+'" target="_blank">開啟</a><div class="mono summary-text">'+esc(r.inviteUrl)+'</div></td><td>'+badge(r.status||"active")+'</td></tr>').join("") || tableEmpty(5,"尚無業務"); }
     async function loadCustomers(){ adminCustomers = await api("/api/admin/customers"); renderCustomers(); } function displayMemberName(r){ const name = String(r.displayName || "").trim(); const uid = String(r.lineUserId || "").trim(); return name && name !== uid ? name : "LINE 會員"; } function memberInitial(r){ return displayMemberName(r).trim().slice(0,1).toUpperCase(); } function memberAvatarHtml(r){ return r.pictureUrl ? '<img class="member-avatar" src="'+esc(r.pictureUrl)+'" alt="">' : '<span class="member-avatar">'+esc(memberInitial(r))+'</span>'; } function renderCustomers(){ const q = (qs("#customerSearch")?.value || "").trim().toLowerCase(); const rows = adminCustomers.filter(r => !q || [displayMemberName(r),r.displayName,r.lineUserId,r.salesName,r.salesCode].join(" ").toLowerCase().includes(q)); qs("#customerRows").innerHTML = rows.map(r => '<tr><td><div class="member-cell">'+memberAvatarHtml(r)+'<div><div class="member-name">'+esc(displayMemberName(r))+'</div><div class="muted">'+esc(r.status||"active")+'</div></div></div></td><td class="mono">'+esc(r.lineUserId)+'</td><td><span class="tier-badge">一般會員</span></td><td>'+esc((r.firstSeenAt||"").slice(0,10))+'</td><td><button class="crm-action" data-crm="'+esc(r.lineUserId)+'">CRM 檔案</button></td></tr>').join("") || tableEmpty(5,"尚無會員"); qsa("[data-crm]").forEach(btn => btn.onclick = () => openCustomerDetail(btn.dataset.crm)); } async function syncProfiles(){ qs("#syncProfileStatus").textContent = "同步中"; try{ const result = await api("/api/admin/customers/sync-profiles",{method:"POST",body:JSON.stringify({limit:200})}); qs("#syncProfileStatus").textContent = "已更新 " + money(result.updated || 0) + " 位"; await loadCustomers(); }catch(err){ qs("#syncProfileStatus").textContent = err.message; } } function closeCrmModal(){ activeCustomer = null; qs("#crmModal").style.display = "none"; } async function openCustomerDetail(lineUserId){ activeCustomer = adminCustomers.find(r => r.lineUserId === lineUserId); if(!activeCustomer) return; qs("#crmModal").style.display = "flex"; qs("#crmAvatar").outerHTML = activeCustomer.pictureUrl ? '<img class="member-avatar" id="crmAvatar" src="'+esc(activeCustomer.pictureUrl)+'" alt="">' : '<span class="member-avatar" id="crmAvatar">'+esc(memberInitial(activeCustomer))+'</span>'; qs("#crmTitle").textContent = "會員檔案：" + displayMemberName(activeCustomer); qs("#crmMemberId").textContent = "LINE UID：" + activeCustomer.lineUserId; qs("#crmName").value = displayMemberName(activeCustomer) === "LINE 會員" ? "" : displayMemberName(activeCustomer); qs("#crmUid").value = activeCustomer.lineUserId; qs("#crmSales").value = (activeCustomer.salesName||"未綁定") + (activeCustomer.salesCode ? " / " + activeCustomer.salesCode : ""); qs("#crmDate").value = (activeCustomer.firstSeenAt||"").slice(0,10); qs("#crmTags").innerHTML = ["一般會員","VIP","團購主","企業客戶","經銷夥伴","LINE 會員","購物會員","點數轉入","高風險","黑名單","A-首購客","B-回購客","C-潛在顧客"].map(t => '<span class="crm-tag">'+esc(t)+'</span>').join(""); await loadCustomerPoints(); } function normalizePointLogs(result){ const nested = result?.data?.data?.data || result?.data?.data || result?.data || {}; return Array.isArray(result.logs) ? result.logs : (Array.isArray(nested.list) ? nested.list : (Array.isArray(result.items) ? result.items : [])); } function pointAmount(log){ return Number(log.get_point||log.points||log.amount||log.point||0) || 0; } function pointBalance(result, logs){ const first = logs[0] || {}; return Number(result.balance ?? first.point_balance ?? first.balance ?? first.after_balance ?? 0) || 0; } function pointEmptyReason(result){ const query = result.query || result?.data?.data?.data?.query || {}; if(result.ok && Number(result?.pagination?.total || 0) === 0) return "母站查得到會員，但此 LINE UID 目前沒有點數紀錄"; return result.message || result.error || "目前尚無紀錄"; } async function loadCustomerPoints(){ if(!activeCustomer) return; qs("#pointStatus").textContent = "點數讀取中"; qs("#pointBalance").textContent = "0"; try{ const result = await api("/api/points/list?lineUserId=" + encodeURIComponent(activeCustomer.lineUserId)); const logs = normalizePointLogs(result); const balance = pointBalance(result, logs); qs("#pointBalance").textContent = money(balance); qs("#pointStatus").textContent = result.skipped ? (result.error || "點數 API 尚未設定") : "點數已更新"; qs("#pointRows").innerHTML = logs.map(log => { const amt = pointAmount(log); const sign = amt >= 0 ? "+" : "-"; return '<div class="point-log"><div><div class="point-log-title">'+esc(log.event_content||log.eventContent||log.reason||log.event_name||log.eventName||"點數異動")+'</div><div class="point-log-date">'+esc(log.created_at||log.createdAt||log.date||"")+'</div></div><div class="point-log-amt" style="color:'+(amt>=0?'#06c755':'#dc2626')+'">'+sign+money(Math.abs(amt))+'</div></div>'; }).join("") || '<div class="empty">'+esc(pointEmptyReason(result))+'</div>'; }catch(err){ qs("#pointStatus").textContent = err.message; qs("#pointRows").innerHTML = '<div class="empty">點數資料讀取失敗</div>'; } } async function submitPointAdjust(type){ if(!activeCustomer) return; const raw = Number(qs("#pointAmount").value || 0); const reason = qs("#pointReason").value.trim(); if(!raw || raw <= 0){ qs("#pointStatus").textContent = "請輸入大於 0 的點數"; return; } if(!reason){ qs("#pointStatus").textContent = "請填寫異動原因"; return; } const points = type === "spend" ? -Math.abs(raw) : Math.abs(raw); qs("#pointStatus").textContent = "送出中"; try{ const result = await api("/api/points/adjust",{method:"POST",body:JSON.stringify({lineUserId:activeCustomer.lineUserId,eventName:type === "spend" ? "後台扣點" : "後台贈點",eventContent:reason,points})}); qs("#pointStatus").textContent = result.skipped ? (result.error || "點數 API 尚未設定") : "點數調整完成"; await loadCustomerPoints(); }catch(err){ qs("#pointStatus").textContent = err.message; } }
-    async function loadProducts(){ const rows = await api("/api/products"); qs("#productRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong></td><td class="mono">'+esc(r.sku)+'</td><td>'+esc(r.category||"")+'</td><td>'+money(r.price)+'</td><td>'+money(r.stockQty)+' / '+money(r.safetyStockQty)+'</td><td>'+badge(r.status||"active", Number(r.stockQty) <= Number(r.safetyStockQty) ? "warn" : "")+'</td></tr>').join("") || tableEmpty(6,"尚無商品"); }
+    function defaultRichConfig(){ const w=2500,h=1686,c=Math.floor(w/3),r=Math.floor(h/2); const labels=["會員分享","業務綁定","點數查詢","商品目錄","訂單查詢","聯絡客服"]; return {size:{width:w,height:h},selected:true,name:"Gusys 會員圖文選單",chatBarText:"Gusys 選單",areas:labels.map((label,i)=>({bounds:{x:(i%3)*c,y:Math.floor(i/3)*r,width:i%3===2?w-c*2:c,height:r},action:{type:"message",text:label}}))}; }
+    function setRichForm(menu){ activeRichMenu = menu || {id:"",name:"Gusys 會員圖文選單",aliasId:"gusys-main",chatBarText:"Gusys 選單",config:defaultRichConfig(),imageDataUrl:""}; qs("#richMenuName").value = activeRichMenu.name || ""; qs("#richMenuAlias").value = activeRichMenu.aliasId || ""; qs("#richMenuChatBar").value = activeRichMenu.chatBarText || ""; qs("#richMenuImage").value = activeRichMenu.imageDataUrl || ""; qs("#richMenuJson").value = JSON.stringify(activeRichMenu.config || defaultRichConfig(), null, 2); renderRichPreview(); }
+    function newRichMenu(){ setRichForm(null); qs("#richMenuStatus").textContent = "已建立預設草稿"; }
+    async function loadRichMenus(){ try{ richMenus = await api("/api/admin/rich-menus"); renderRichMenus(); if(!activeRichMenu) setRichForm(richMenus[0] || null); }catch(err){ qs("#richMenuRows").innerHTML = '<div class="empty">'+esc(err.message)+'</div>'; } }
+    function renderRichMenus(){ qs("#richMenuRows").innerHTML = richMenus.map(m => '<div class="rich-item '+(activeRichMenu&&activeRichMenu.id===m.id?'active':'')+'" data-rich-id="'+esc(m.id)+'"><div class="member-name">'+esc(m.name||"未命名選單")+'</div><div class="muted mono">'+esc(m.aliasId||m.id)+'</div><div style="margin-top:8px">'+badge(m.status||"draft",m.status==="deployed"?"":"warn")+'</div><div class="muted" style="margin-top:6px">'+esc(m.updatedAt||"")+'</div></div>').join("") || '<div class="empty">尚無圖文選單檔案</div>'; qsa("[data-rich-id]").forEach(el=>el.onclick=()=>{ const item=richMenus.find(m=>m.id===el.dataset.richId); setRichForm(item); renderRichMenus(); }); }
+    function readRichConfig(){ try{ return JSON.parse(qs("#richMenuJson").value || "{}"); }catch(err){ throw new Error("圖文選單 JSON 格式錯誤：" + err.message); } }
+    function renderRichPreview(){ let cfg; try{ cfg=readRichConfig(); }catch(_){ cfg={areas:[]}; } const areas=Array.isArray(cfg.areas)?cfg.areas:[]; qs("#richPreview").innerHTML = (areas.length?areas:defaultRichConfig().areas).slice(0,6).map((a,i)=>'<div class="rich-preview-cell">'+esc(a.action?.text||a.action?.label||a.action?.data||('區塊 '+(i+1)))+'</div>').join(""); }
+    async function saveRichMenu(){ try{ const payload={id:activeRichMenu?.id||"",name:qs("#richMenuName").value,aliasId:qs("#richMenuAlias").value,chatBarText:qs("#richMenuChatBar").value,imageDataUrl:qs("#richMenuImage").value,config:readRichConfig()}; const saved=await api("/api/admin/rich-menus",{method:"POST",body:JSON.stringify(payload)}); qs("#richMenuStatus").textContent="已儲存"; activeRichMenu=saved; await loadRichMenus(); setRichForm(saved); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }
+    async function deployRichMenu(){ if(!confirm("部署後會成為 LINE 官方帳號預設圖文選單，確定送出？")) return; try{ await saveRichMenu(); const result=await api("/api/admin/rich-menus/deploy",{method:"POST",body:JSON.stringify({id:activeRichMenu?.id})}); qs("#richMenuStatus").textContent="已部署："+(result.richMenuId||""); await loadRichMenus(); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }
+    async function deleteRichMenu(){ if(!activeRichMenu?.id){ qs("#richMenuStatus").textContent="尚未選擇檔案"; return; } if(!confirm("刪除此圖文選單檔案？")) return; try{ await api("/api/admin/rich-menus?id="+encodeURIComponent(activeRichMenu.id),{method:"DELETE"}); activeRichMenu=null; qs("#richMenuStatus").textContent="已刪除"; await loadRichMenus(); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }    async function loadProducts(){ const rows = await api("/api/products"); qs("#productRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong></td><td class="mono">'+esc(r.sku)+'</td><td>'+esc(r.category||"")+'</td><td>'+money(r.price)+'</td><td>'+money(r.stockQty)+' / '+money(r.safetyStockQty)+'</td><td>'+badge(r.status||"active", Number(r.stockQty) <= Number(r.safetyStockQty) ? "warn" : "")+'</td></tr>').join("") || tableEmpty(6,"尚無商品"); }
     async function loadMessages(){ const rows = await api("/api/admin/line-messages"); const html = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); qs("#messageRows").innerHTML = html; qs("#dashboardMessages").innerHTML = rows.slice(0,6).map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); }
     async function loadWebhooks(){ const rows = await api("/api/admin/webhooks"); qs("#webhookRows").innerHTML = rows.map(r => { const s = r.summary || {}; const tone = s.invalidSignature ? "danger" : (s.hasReplyPayload ? "" : "warn"); const label = s.invalidSignature ? "簽章錯誤" : (s.hasReplyPayload ? "有回覆" : "已轉送"); const detail = s.contentType || "無 content-type"; return '<tr><td>'+esc(r.createdAt)+'</td><td>'+esc(r.source)+'</td><td class="summary-text">'+esc(r.messageText||"")+'</td><td>'+esc(r.motherStatus||"")+'</td><td>'+badge(label,tone)+'<div class="muted">'+esc(detail)+'</div></td></tr>'; }).join("") || tableEmpty(5,"尚無紀錄"); }
     async function loadAi(){ const rows = await api("/api/ai-monitor/insights?limit=100"); qs("#aiRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td>'+badge(r.riskLevel||"-", r.riskLevel === "high" ? "danger" : (r.riskLevel === "medium" ? "warn" : ""))+'</td><td>'+esc(r.category||"")+'</td><td class="summary-text">'+esc(r.summary||"")+'</td><td class="summary-text">'+esc(r.recommendedAction||"")+'</td></tr>').join("") || tableEmpty(5,"尚無 AI 洞察"); }
     async function loadReports(){ const period = qs("#reportPeriod").value || new Date().toISOString().slice(0,7); qs("#reportPeriod").value = period; const rows = await api("/api/reports/monthly-sales?period=" + encodeURIComponent(period)); qs("#reportRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.salesName||"-")+'</td><td class="mono">'+esc(r.salesCode||"")+'</td><td>'+money(r.orderCount)+'</td><td>'+money(r.revenue)+'</td><td>'+money(r.grossProfit)+'</td></tr>').join("") || tableEmpty(5,"尚無業績資料"); }
-    async function loadAll(){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadMessages(),loadWebhooks(),loadAi(),loadReports()]); }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } } }
+    async function loadAll(){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadMessages(),loadWebhooks(),loadAi(),loadReports(),loadRichMenus()]); }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } } }
     setView("dashboard"); loadAll();
   </script>
 </body>
