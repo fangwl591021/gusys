@@ -32,6 +32,8 @@ export default {
       if (url.pathname === "/api/admin/customers" && request.method === "PATCH") return updateAdminCustomer(request, env);
       if (url.pathname === "/api/admin/customers/sync-profiles" && request.method === "POST") return syncAdminCustomerProfiles(request, env);
       if (url.pathname === "/api/admin/line-messages" && request.method === "GET") return listAdminLineMessages(request, env);
+      if (url.pathname === "/api/admin/settings" && request.method === "GET") return getAdminSettings(request, env);
+      if (url.pathname === "/api/admin/settings" && request.method === "POST") return saveAdminSettings(request, env);
       if ((url.pathname === "/api/admin/webhook-events" || url.pathname === "/api/admin/webhooks") && request.method === "GET") return listAdminWebhookEvents(request, env);
       if (url.pathname === "/api/products" && request.method === "GET") return listProducts(request, env);
       if (url.pathname === "/api/products" && request.method === "POST") return createProduct(request, env);
@@ -554,6 +556,100 @@ async function syncAdminCustomerProfiles(request, env) {
   return json({ ok: true, data: { updated, skipped, failed: failed.slice(0, 20) } });
 }
 
+function defaultHookteaSettings(env) {
+  const publicUrl = String(env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev").replace(/\/+$/, "");
+  return {
+    shop: {
+      name: String(env.LINE_OA_NAME || "Gusys 經銷商系統"),
+      currency: "TWD",
+      orderPrefix: "GU",
+      invoiceMode: "none",
+      supportLineUrl: "",
+    },
+    payment: {
+      provider: "manual",
+      enabled: false,
+      methods: { creditCard: false, atm: true, cvs: false, cod: false, linePay: false },
+      merchantId: "",
+      hashKey: "",
+      hashIv: "",
+      returnUrl: publicUrl + "/payment/return",
+      notifyUrl: publicUrl + "/payment/notify",
+      bankAccount: "",
+      bankName: "",
+      accountName: "",
+    },
+    shipping: {
+      homeDelivery: true,
+      cvsPickup: false,
+      selfPickup: false,
+      defaultFee: 80,
+      freeShippingThreshold: 1500,
+      senderName: "",
+      senderPhone: "",
+      senderAddress: "",
+    },
+    order: {
+      autoCreateFromLine: false,
+      allowCustomerCancelBeforePaid: true,
+      paidStatusLocksCancel: true,
+      shippedStatusLocksCancel: true,
+      defaultSalesAttribution: "customer_binding",
+    },
+    notification: {
+      orderCreated: true,
+      paymentReceived: true,
+      shipped: true,
+      lowStock: true,
+    },
+  };
+}
+
+function mergePlainSettings(base, override) {
+  const result = { ...base };
+  for (const [key, value] of Object.entries(override || {})) {
+    if (value && typeof value === "object" && !Array.isArray(value) && base[key] && typeof base[key] === "object" && !Array.isArray(base[key])) {
+      result[key] = mergePlainSettings(base[key], value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+async function getAdminSettings(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const defaults = defaultHookteaSettings(env);
+  const row = await env.DB.prepare(`
+    SELECT value_json AS valueJson, updated_at AS updatedAt, updated_by AS updatedBy
+    FROM system_settings
+    WHERE key = 'hooktea_settings'
+    LIMIT 1
+  `).first().catch(error => {
+    if (String(error?.message || error).includes("no such table")) return null;
+    throw error;
+  });
+  const saved = parseJson(row?.valueJson || "{}", {});
+  return json({ ok: true, data: { settings: mergePlainSettings(defaults, saved), updatedAt: row?.updatedAt || "", updatedBy: row?.updatedBy || "" } });
+}
+
+async function saveAdminSettings(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const defaults = defaultHookteaSettings(env);
+  const settings = mergePlainSettings(defaults, payload.settings || payload);
+  await env.DB.prepare(`
+    INSERT INTO system_settings (key, value_json, updated_by, updated_at)
+    VALUES ('hooktea_settings', ?, 'admin', datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET
+      value_json = excluded.value_json,
+      updated_by = excluded.updated_by,
+      updated_at = excluded.updated_at
+  `).bind(JSON.stringify(settings)).run();
+  return json({ ok: true, data: { settings } });
+}
 async function updateAdminCustomer(request, env) {
   requireAdmin(request, env);
   requireDb(env);
@@ -2009,7 +2105,7 @@ function renderHookteaAdminPage(env) {
     <section class="view" id="view-webhooks"><section class="panel"><div class="panel-header"><div class="section-title">雙 Webhook 轉送狀態</div><span class="muted">LINE OA -> Gusys Worker -> 母站</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>來源</th><th>訊息</th><th>母站狀態</th><th>摘要</th></tr></thead><tbody id="webhookRows"></tbody></table></div></section></section>
     <section class="view" id="view-richmenu"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/menu.html?v=hooktea-port-20260703" style="width:100%;height:100%;border:0;display:block"></iframe></section></section>
     <section class="view" id="view-audit"><section class="panel"><div class="panel-header"><div class="section-title">操作紀錄</div><span class="status-badge">Webhook 事件</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>類型</th><th>目前紀錄來源</th><th>狀態</th></tr></thead><tbody><tr><td>LINE 訊息</td><td>/api/admin/line-messages</td><td>已串接</td></tr><tr><td>母站轉送</td><td>/api/admin/webhooks</td><td>已串接</td></tr><tr><td>後台操作</td><td>audit_logs</td><td>待建立</td></tr></tbody></table></div></section></section>
-    <section class="view" id="view-settings"><section class="panel"><div class="panel-header"><div class="section-title">系統設定</div></div><div class="panel-body"><div class="ops-list"><div class="ops-item"><div class="ops-label">Worker</div><div class="ops-value mono">${escapeHtml(publicUrl)}</div></div><div class="ops-item"><div class="ops-label">LINE Webhook</div><div class="ops-value mono">${escapeHtml(lineWebhookUrl)}</div></div><div class="ops-item"><div class="ops-label">母站 Webhook</div><div class="ops-value mono">${escapeHtml(motherUrl)}</div></div></div><p class="muted">若有設定 ADMIN_TOKEN，後台 API 會要求輸入 token；未設定時可直接讀取。</p></div></section></section>
+    <section class="view" id="view-settings"><section class="panel"><div class="panel-header"><div class="section-title">系統設定</div><div><span class="muted" id="settingsStatus"></span> <button class="btn-outline btn-small" id="reloadSettings">重新載入</button> <button class="btn-green-main btn-small" id="saveSettings">儲存設定</button></div></div><div class="panel-body"><div class="ops-list"><div class="ops-item"><div class="ops-label">Worker</div><div class="ops-value mono">${escapeHtml(publicUrl)}</div></div><div class="ops-item"><div class="ops-label">LINE Webhook</div><div class="ops-value mono">${escapeHtml(lineWebhookUrl)}</div></div><div class="ops-item"><div class="ops-label">母站 Webhook</div><div class="ops-value mono">${escapeHtml(motherUrl)}</div></div></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">商店與訂單</div><span class="status-badge">HookTea 設定</span></div><div class="panel-body"><div class="form-grid"><input id="setShopName" placeholder="商店名稱"><input id="setCurrency" placeholder="幣別 TWD"><input id="setOrderPrefix" placeholder="訂單前綴"><select id="setInvoiceMode"><option value="none">不開發票</option><option value="manual">手動開立</option><option value="electronic">電子發票</option></select></div><div class="form-grid"><select id="setDefaultSalesAttribution"><option value="customer_binding">依會員業務歸屬</option><option value="manual">手動指定業務</option></select><label><input type="checkbox" id="setAutoCreateFromLine"> LINE 訊息自動建單</label><label><input type="checkbox" id="setAllowCancel"> 未付款可取消</label><label><input type="checkbox" id="setShipLock"> 出貨後不可取消</label></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">金流設定</div><span class="status-badge warn">未啟用請款</span></div><div class="panel-body"><div class="form-grid"><select id="setPaymentProvider"><option value="manual">人工匯款</option><option value="ecpay">綠界 ECPay</option><option value="newebpay">藍新 NewebPay</option><option value="linepay">LINE Pay</option></select><label><input type="checkbox" id="setPaymentEnabled"> 啟用金流</label><input id="setMerchantId" placeholder="Merchant ID"><input id="setBankAccount" placeholder="匯款帳號"></div><div class="form-grid"><input id="setHashKey" placeholder="HashKey / API Key"><input id="setHashIv" placeholder="HashIV / Secret"><input id="setReturnUrl" placeholder="付款返回 URL"><input id="setNotifyUrl" placeholder="付款通知 URL"></div><div class="form-grid"><label><input type="checkbox" id="payCreditCard"> 信用卡</label><label><input type="checkbox" id="payAtm"> ATM 轉帳</label><label><input type="checkbox" id="payCvs"> 超商代碼</label><label><input type="checkbox" id="payCod"> 貨到付款</label></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">物流與通知</div></div><div class="panel-body"><div class="form-grid"><label><input type="checkbox" id="shipHome"> 宅配</label><label><input type="checkbox" id="shipCvs"> 超商取貨</label><label><input type="checkbox" id="shipSelf"> 自取</label><input id="setShippingFee" type="number" placeholder="基本運費"></div><div class="form-grid"><input id="setFreeShipping" type="number" placeholder="免運門檻"><input id="setSenderName" placeholder="寄件人"><input id="setSenderPhone" placeholder="寄件電話"><input id="setSenderAddress" placeholder="寄件地址"></div><div class="form-grid"><label><input type="checkbox" id="noticeOrderCreated"> 建單通知</label><label><input type="checkbox" id="noticePaid"> 收款通知</label><label><input type="checkbox" id="noticeShipped"> 出貨通知</label><label><input type="checkbox" id="noticeLowStock"> 低庫存通知</label></div></div></section></section>
   </div></main><div class="crm-modal-mask" id="crmModal">
   <div class="crm-modal-body">
     <div class="crm-modal-header">
@@ -2064,7 +2160,7 @@ function renderHookteaAdminPage(env) {
   <script>
     const publicUrl = ${JSON.stringify(publicUrl)}; const motherUrl = ${JSON.stringify(motherUrl)};
     const titles = {dashboard:["營運統計","即時掌握業務、客戶、商品、LINE 訊息與母站轉送"],sales:["業務 QR","建立業務專屬 QR，作為日後業績歸屬依據"],customers:["客戶 CRM","所有加入官方帳號者自動建檔，並追蹤互動與業務歸屬"],inventory:["商城商品","管理商品、售價、成本與安全庫存"],reports:["業績報表","每月業務績效與毛利彙整"],orders:["訂單維護","HookTea 同款訂單工作區，待串接 Gusys 訂單資料表"],points:["點數總表","對接母站點數 API，集中查詢會員點數紀錄"],messages:["LINE 訊息","查詢 LINE OA 對話紀錄"],ai:["AI 後台監控","追蹤高風險訊息、分類與建議動作"],webhooks:["雙 Webhook","查看母站轉送狀態，不顯示整段 HTML 原始碼"],richmenu:["圖文選單","規劃 LINE 圖文選單與 LIFF 入口"],audit:["操作紀錄","記錄後台操作與 webhook 重要事件"],settings:["系統設定","確認 Worker、LINE Webhook 與母站 Webhook"]};
-    let adminToken = localStorage.getItem("gusys_admin_token") || ""; let adminCustomers = []; let activeCustomer = null; let activePointCustomer = null; const pointBalanceCache = {}; let richMenus = []; let activeRichMenu = null; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
+    let adminToken = localStorage.getItem("gusys_admin_token") || ""; let adminCustomers = []; let activeCustomer = null; let activePointCustomer = null; const pointBalanceCache = {}; let richMenus = []; let activeRichMenu = null; let hookteaSettings = null; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
     const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); const money = v => new Intl.NumberFormat("zh-TW").format(Number(v || 0));
     qs("#adminToken").value = adminToken; function headers(){ return adminToken ? {"x-admin-token":adminToken} : {}; } function badge(text,tone){ return '<span class="status-badge '+(tone||"")+'">'+esc(text)+'</span>'; }
     async function api(path,opt){ const init = opt || {}; init.headers = Object.assign({"content-type":"application/json"}, headers(), init.headers || {}); const res = await fetch(path, init); const data = await res.json().catch(() => ({ok:false,error:"bad_json"})); if(!res.ok || !data.ok){ const err = new Error(data.error || data.message || ("HTTP "+res.status)); err.status = res.status; throw err; } return data.data || data; }
@@ -2073,7 +2169,7 @@ function renderHookteaAdminPage(env) {
     qs("#saveToken").onclick = () => { adminToken = qs("#adminToken").value.trim(); localStorage.setItem("gusys_admin_token", adminToken); qs("#loginCover").style.display = "none"; loadAll(); }; qs("#loginSubmit").onclick = () => { adminToken = qs("#loginToken").value.trim(); qs("#adminToken").value = adminToken; localStorage.setItem("gusys_admin_token", adminToken); qs("#loginCover").style.display = "none"; loadAll(); }; qs("#refreshAll").onclick = () => loadAll();
     qs("#createSales").onclick = async () => { try{ await api("/api/sales/reps",{method:"POST",body:JSON.stringify({name:qs("#salesName").value,phone:qs("#salesPhone").value,lineUserId:qs("#salesLine").value,salesCode:qs("#salesCode").value})}); qs("#salesStatus").textContent = "已建立"; await Promise.all([loadSales(),loadSummary()]); }catch(err){ qs("#salesStatus").textContent = err.message; } };
     qs("#createProduct").onclick = async () => { try{ await api("/api/products",{method:"POST",body:JSON.stringify({sku:qs("#productSku").value,category:qs("#productCategory").value,name:qs("#productName").value,price:qs("#productPrice").value,cost:qs("#productCost").value,stockQty:qs("#productStock").value,safetyStockQty:qs("#productSafety").value})}); qs("#productStatus").textContent = "已建立"; await Promise.all([loadProducts(),loadSummary()]); }catch(err){ qs("#productStatus").textContent = err.message; } };
-    qs("#runAi").onclick = async () => { qs("#aiRunStatus").textContent = "分析中"; try{ await api("/api/ai-monitor/analyze",{method:"POST",body:JSON.stringify({limit:30})}); qs("#aiRunStatus").textContent = "完成"; await loadAi(); }catch(err){ qs("#aiRunStatus").textContent = err.message; } }; qs("#loadReport").onclick = () => loadReports(); qs("#customerSearch").addEventListener("input", () => renderCustomers()); qs("#pointsSearch").addEventListener("input", () => renderPointMembers()); qs("#refreshPoints").onclick = () => loadSelectedPointLedger(); qs("#crmClose").onclick = closeCrmModal; qs("#crmCancel").onclick = closeCrmModal; qs("#crmSave").onclick = saveCustomerCrm; qs("#syncProfiles").onclick = syncProfiles; qs("#grantPoints").onclick = () => submitPointAdjust("earn"); qs("#deductPoints").onclick = () => submitPointAdjust("spend");
+    qs("#runAi").onclick = async () => { qs("#aiRunStatus").textContent = "分析中"; try{ await api("/api/ai-monitor/analyze",{method:"POST",body:JSON.stringify({limit:30})}); qs("#aiRunStatus").textContent = "完成"; await loadAi(); }catch(err){ qs("#aiRunStatus").textContent = err.message; } }; qs("#loadReport").onclick = () => loadReports(); qs("#reloadSettings").onclick = () => loadSettings(); qs("#saveSettings").onclick = () => saveSettings(); qs("#customerSearch").addEventListener("input", () => renderCustomers()); qs("#pointsSearch").addEventListener("input", () => renderPointMembers()); qs("#refreshPoints").onclick = () => loadSelectedPointLedger(); qs("#crmClose").onclick = closeCrmModal; qs("#crmCancel").onclick = closeCrmModal; qs("#crmSave").onclick = saveCustomerCrm; qs("#syncProfiles").onclick = syncProfiles; qs("#grantPoints").onclick = () => submitPointAdjust("earn"); qs("#deductPoints").onclick = () => submitPointAdjust("spend");
     function showUnauthorized(){ qs("#systemStatus").textContent = "需要 token"; qs("#systemStatus").className = "status-badge warn"; qs("#loginCover").style.display = "flex"; } function tableEmpty(cols,text){ return '<tr><td colspan="'+cols+'" class="empty">'+esc(text)+'</td></tr>'; }
     async function loadSummary(){ const s = await api("/api/admin/summary"); qs("#metrics").innerHTML = [["業務",s.sales],["用戶",s.customers],["商品",s.products],["LINE 訊息",s.messages],["母站轉送",s.webhooks],["高風險",s.highRisk]].map(i => '<div class="stat-card"><div class="stat-label">'+esc(i[0])+'</div><div class="stat-value">'+money(i[1])+'</div></div>').join(""); const latest = s.latestMother || {}; const motherState = latest.motherStatus ? "HTTP " + latest.motherStatus : "尚無紀錄"; qs("#opsSummary").innerHTML = [["Worker",publicUrl],["LINE Webhook",publicUrl+"/line-webhook"],["母站 Webhook",motherUrl],["最近母站轉送",motherState],["最近訊息",latest.messageText||"尚無"],["最近時間",latest.createdAt||"尚無"]].map(i => '<div class="ops-item"><div class="ops-label">'+esc(i[0])+'</div><div class="ops-value">'+esc(i[1])+'</div></div>').join(""); qs("#lastRefresh").textContent = new Date().toLocaleString("zh-TW"); qs("#systemStatus").textContent = "正常"; qs("#systemStatus").className = "status-badge"; }
     async function loadSales(){ const rows = await api("/api/sales/reps"); qs("#salesRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong><div class="muted">'+esc(r.phone)+'</div></td><td class="mono">'+esc(r.salesCode)+'</td><td>'+(r.qrUrl?'<img class="qr" src="'+esc(r.qrUrl)+'" alt="QR">':"-")+'</td><td><a href="'+esc(r.inviteUrl)+'" target="_blank">開啟</a><div class="mono summary-text">'+esc(r.inviteUrl)+'</div></td><td>'+badge(r.status||"active")+'</td></tr>').join("") || tableEmpty(5,"尚無業務"); }
@@ -2092,8 +2188,12 @@ function renderHookteaAdminPage(env) {
     async function loadMessages(){ const rows = await api("/api/admin/line-messages"); const html = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); qs("#messageRows").innerHTML = html; qs("#dashboardMessages").innerHTML = rows.slice(0,6).map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); }
     async function loadWebhooks(){ const rows = await api("/api/admin/webhooks"); qs("#webhookRows").innerHTML = rows.map(r => { const s = r.summary || {}; const tone = s.invalidSignature ? "danger" : (s.hasReplyPayload ? "" : "warn"); const label = s.invalidSignature ? "簽章錯誤" : (s.hasReplyPayload ? "有回覆" : "已轉送"); const detail = s.contentType || "無 content-type"; return '<tr><td>'+esc(r.createdAt)+'</td><td>'+esc(r.source)+'</td><td class="summary-text">'+esc(r.messageText||"")+'</td><td>'+esc(r.motherStatus||"")+'</td><td>'+badge(label,tone)+'<div class="muted">'+esc(detail)+'</div></td></tr>'; }).join("") || tableEmpty(5,"尚無紀錄"); }
     async function loadAi(){ const rows = await api("/api/ai-monitor/insights?limit=100"); qs("#aiRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td>'+badge(r.riskLevel||"-", r.riskLevel === "high" ? "danger" : (r.riskLevel === "medium" ? "warn" : ""))+'</td><td>'+esc(r.category||"")+'</td><td class="summary-text">'+esc(r.summary||"")+'</td><td class="summary-text">'+esc(r.recommendedAction||"")+'</td></tr>').join("") || tableEmpty(5,"尚無 AI 洞察"); }
-    async function loadReports(){ const period = qs("#reportPeriod").value || new Date().toISOString().slice(0,7); qs("#reportPeriod").value = period; const rows = await api("/api/reports/monthly-sales?period=" + encodeURIComponent(period)); qs("#reportRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.salesName||"-")+'</td><td class="mono">'+esc(r.salesCode||"")+'</td><td>'+money(r.orderCount)+'</td><td>'+money(r.revenue)+'</td><td>'+money(r.grossProfit)+'</td></tr>').join("") || tableEmpty(5,"尚無業績資料"); }
-    async function loadAll(){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadMessages(),loadWebhooks(),loadAi(),loadReports()]); }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } } }
+    function setChecked(id,value){ const el=qs("#"+id); if(el) el.checked=!!value; } function checked(id){ return !!qs("#"+id)?.checked; } function setValue(id,value){ const el=qs("#"+id); if(el) el.value=value ?? ""; } function value(id){ return qs("#"+id)?.value ?? ""; }
+    function fillSettings(s){ hookteaSettings=s||{}; const shop=s.shop||{}, pay=s.payment||{}, methods=pay.methods||{}, ship=s.shipping||{}, order=s.order||{}, note=s.notification||{}; setValue("setShopName",shop.name); setValue("setCurrency",shop.currency); setValue("setOrderPrefix",shop.orderPrefix); setValue("setInvoiceMode",shop.invoiceMode); setValue("setDefaultSalesAttribution",order.defaultSalesAttribution); setChecked("setAutoCreateFromLine",order.autoCreateFromLine); setChecked("setAllowCancel",order.allowCustomerCancelBeforePaid); setChecked("setShipLock",order.shippedStatusLocksCancel); setValue("setPaymentProvider",pay.provider); setChecked("setPaymentEnabled",pay.enabled); setValue("setMerchantId",pay.merchantId); setValue("setBankAccount",pay.bankAccount); setValue("setHashKey",pay.hashKey); setValue("setHashIv",pay.hashIv); setValue("setReturnUrl",pay.returnUrl); setValue("setNotifyUrl",pay.notifyUrl); setChecked("payCreditCard",methods.creditCard); setChecked("payAtm",methods.atm); setChecked("payCvs",methods.cvs); setChecked("payCod",methods.cod); setChecked("shipHome",ship.homeDelivery); setChecked("shipCvs",ship.cvsPickup); setChecked("shipSelf",ship.selfPickup); setValue("setShippingFee",ship.defaultFee); setValue("setFreeShipping",ship.freeShippingThreshold); setValue("setSenderName",ship.senderName); setValue("setSenderPhone",ship.senderPhone); setValue("setSenderAddress",ship.senderAddress); setChecked("noticeOrderCreated",note.orderCreated); setChecked("noticePaid",note.paymentReceived); setChecked("noticeShipped",note.shipped); setChecked("noticeLowStock",note.lowStock); }
+    function collectSettings(){ const current=hookteaSettings||{}; return {shop:{...(current.shop||{}),name:value("setShopName"),currency:value("setCurrency"),orderPrefix:value("setOrderPrefix"),invoiceMode:value("setInvoiceMode")},payment:{...(current.payment||{}),provider:value("setPaymentProvider"),enabled:checked("setPaymentEnabled"),merchantId:value("setMerchantId"),bankAccount:value("setBankAccount"),hashKey:value("setHashKey"),hashIv:value("setHashIv"),returnUrl:value("setReturnUrl"),notifyUrl:value("setNotifyUrl"),methods:{creditCard:checked("payCreditCard"),atm:checked("payAtm"),cvs:checked("payCvs"),cod:checked("payCod"),linePay:value("setPaymentProvider")==="linepay"}},shipping:{...(current.shipping||{}),homeDelivery:checked("shipHome"),cvsPickup:checked("shipCvs"),selfPickup:checked("shipSelf"),defaultFee:Number(value("setShippingFee")||0),freeShippingThreshold:Number(value("setFreeShipping")||0),senderName:value("setSenderName"),senderPhone:value("setSenderPhone"),senderAddress:value("setSenderAddress")},order:{...(current.order||{}),defaultSalesAttribution:value("setDefaultSalesAttribution"),autoCreateFromLine:checked("setAutoCreateFromLine"),allowCustomerCancelBeforePaid:checked("setAllowCancel"),shippedStatusLocksCancel:checked("setShipLock")},notification:{...(current.notification||{}),orderCreated:checked("noticeOrderCreated"),paymentReceived:checked("noticePaid"),shipped:checked("noticeShipped"),lowStock:checked("noticeLowStock")}}; }
+    async function loadSettings(){ qs("#settingsStatus").textContent="讀取中"; try{ const data=await api("/api/admin/settings"); fillSettings(data.settings||{}); qs("#settingsStatus").textContent=data.updatedAt?"已載入 "+data.updatedAt:"已載入預設值"; }catch(err){ qs("#settingsStatus").textContent=err.message; } }
+    async function saveSettings(){ qs("#settingsStatus").textContent="儲存中"; try{ const saved=await api("/api/admin/settings",{method:"POST",body:JSON.stringify({settings:collectSettings()})}); fillSettings(saved.settings||{}); qs("#settingsStatus").textContent="設定已儲存"; }catch(err){ qs("#settingsStatus").textContent=err.message; } }    async function loadReports(){ const period = qs("#reportPeriod").value || new Date().toISOString().slice(0,7); qs("#reportPeriod").value = period; const rows = await api("/api/reports/monthly-sales?period=" + encodeURIComponent(period)); qs("#reportRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.salesName||"-")+'</td><td class="mono">'+esc(r.salesCode||"")+'</td><td>'+money(r.orderCount)+'</td><td>'+money(r.revenue)+'</td><td>'+money(r.grossProfit)+'</td></tr>').join("") || tableEmpty(5,"尚無業績資料"); }
+    async function loadAll(){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadMessages(),loadWebhooks(),loadAi(),loadReports(),loadSettings()]); }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } } }
     setView("dashboard"); loadAll();
   </script>
 </body>
