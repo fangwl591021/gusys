@@ -1853,10 +1853,6 @@ function buildSalesInviteUrl(env, salesCode) {
   const url = new URL(motherEntry || `${workerBase}/sales/invite`);
   url.searchParams.set("sales", salesCode);
   url.searchParams.set("source", "sales_qr");
-  const bindUrl = new URL(`${workerBase}/api/sales/bind`);
-  bindUrl.searchParams.set("sales", salesCode);
-  bindUrl.searchParams.set("source", "mother_site");
-  url.searchParams.set("gusys_bind", bindUrl.toString());
   return url.toString();
 }
 
