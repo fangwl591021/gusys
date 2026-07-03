@@ -1643,6 +1643,7 @@ async function monthlySalesReport(request, env) {
 async function renderSalesInvitePage(request, env) {
   const url = new URL(request.url);
   const salesCode = normalizeSalesCode(url.searchParams.get("sales") || url.searchParams.get("ref") || "");
+  const motherUrl = env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || "https://aiwe.cc/index.php/line_login/10279/";
   return new Response(`<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -1666,7 +1667,10 @@ async function renderSalesInvitePage(request, env) {
     <h1>Gusys 業務綁定</h1>
     <div class="box">
       <p>業務代碼：<span class="code" id="salesCode">${escapeHtml(salesCode || "未帶入")}</span></p>
-      <p>LINE LIFF 串接完成後，這頁會自動取得 LINE UID 並綁定業務。現在可用下方欄位做測試。</p>
+      <p>正在開啟母站會員頁。若未自動跳轉，請按下方按鈕。</p>
+      <p><a id="motherLink" href="${escapeHtml(motherUrl)}">開啟母站會員頁</a></p>
+      <p class="code">業務代碼已由 Gusys 保留：${escapeHtml(salesCode || "未帶入")}</p>
+      <p>測試綁定用欄位：</p>
       <input id="lineUserId" placeholder="LINE User ID">
       <input id="displayName" placeholder="客戶姓名">
       <input id="phone" placeholder="電話">
@@ -1676,6 +1680,8 @@ async function renderSalesInvitePage(request, env) {
   </main>
   <script>
     const salesCode = ${JSON.stringify(salesCode)};
+    const motherUrl = ${JSON.stringify(motherUrl)};
+    if (motherUrl) setTimeout(() => { location.href = motherUrl; }, 900);
     document.getElementById("bind").addEventListener("click", async () => {
       const payload = {
         salesCode,
@@ -1849,8 +1855,7 @@ async function recordWebhookDebug(env, key, value) {
 
 function buildSalesInviteUrl(env, salesCode) {
   const workerBase = String(env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev").replace(/\/+$/, "");
-  const motherEntry = String(env.MOTHER_SALES_ENTRY_URL || env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || "https://aiwe.cc/index.php/line_login/10279/").trim();
-  const url = new URL(motherEntry || `${workerBase}/sales/invite`);
+  const url = new URL(`${workerBase}/sales/invite`);
   url.searchParams.set("sales", salesCode);
   url.searchParams.set("source", "sales_qr");
   return url.toString();
