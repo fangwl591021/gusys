@@ -37,7 +37,7 @@ export default {
       if (url.pathname === "/api/products" && request.method === "POST") return createProduct(request, env);
       if (url.pathname === "/api/sales/reps" && request.method === "POST") return createSalesRep(request, env);
       if (url.pathname === "/api/sales/reps" && request.method === "GET") return listSalesReps(env);
-      if (url.pathname === "/api/sales/bind" && request.method === "POST") return bindCustomerToSalesRep(request, env);
+      if (url.pathname === "/api/sales/bind" && (request.method === "POST" || request.method === "GET")) return bindCustomerToSalesRep(request, env);
       if (url.pathname === "/api/members/check-or-create" && request.method === "POST") return checkOrCreateMember(request, env);
       if (url.pathname === "/api/points/adjust" && request.method === "POST") return adjustMemberPoints(request, env);
       if (url.pathname === "/api/points/list" && request.method === "GET") return listMemberPoints(request, env);
@@ -834,13 +834,21 @@ async function listSalesReps(env) {
 
 async function bindCustomerToSalesRep(request, env) {
   requireDb(env);
-  const payload = await request.json().catch(() => ({}));
+  const url = new URL(request.url);
+  const queryPayload = Object.fromEntries(url.searchParams.entries());
+  const bodyPayload = request.method === "GET" ? {} : await request.json().catch(() => ({}));
+  const payload = { ...queryPayload, ...bodyPayload };
+  const lineUserId = payload.lineUserId || payload.LINE_user_id || payload.uid || payload.userId;
+  const salesCode = payload.salesCode || payload.sales_code || payload.sales || payload.ref;
+  if (!lineUserId) {
+    return json({ ok: false, error: "missing_line_user_id", message: "請由母站 LINE 登入後帶 LINE UID 回寫 Gusys" }, 400);
+  }
   const result = await bindCustomerBySalesCode(env, {
-    lineUserId: payload.lineUserId,
-    displayName: payload.displayName,
+    lineUserId,
+    displayName: payload.displayName || payload.LINE_display_name || payload.name,
     phone: payload.phone,
     address: payload.address,
-    salesCode: payload.salesCode,
+    salesCode,
     source: payload.source || "api",
   });
   return json({ ok: true, data: result });
@@ -1845,7 +1853,10 @@ function buildSalesInviteUrl(env, salesCode) {
   const url = new URL(motherEntry || `${workerBase}/sales/invite`);
   url.searchParams.set("sales", salesCode);
   url.searchParams.set("source", "sales_qr");
-  url.searchParams.set("gusys_bind", `${workerBase}/api/sales/bind`);
+  const bindUrl = new URL(`${workerBase}/api/sales/bind`);
+  bindUrl.searchParams.set("sales", salesCode);
+  bindUrl.searchParams.set("source", "mother_site");
+  url.searchParams.set("gusys_bind", bindUrl.toString());
   return url.toString();
 }
 
