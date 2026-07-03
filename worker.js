@@ -697,6 +697,7 @@ async function ensureCrmSalesRep(env, customer) {
   const existing = await env.DB.prepare(`
     SELECT id, sales_code AS salesCode, name, line_user_id AS lineUserId,
            phone, status, invite_url AS inviteUrl, qr_url AS qrUrl,
+           external_invite_url AS externalInviteUrl,
            created_at AS createdAt, updated_at AS updatedAt
     FROM sales_reps
     WHERE line_user_id = ?
@@ -723,6 +724,7 @@ async function ensureCrmSalesRep(env, customer) {
   return env.DB.prepare(`
     SELECT id, sales_code AS salesCode, name, line_user_id AS lineUserId,
            phone, status, invite_url AS inviteUrl, qr_url AS qrUrl,
+           external_invite_url AS externalInviteUrl,
            created_at AS createdAt, updated_at AS updatedAt
     FROM sales_reps
     WHERE line_user_id = ?
@@ -793,6 +795,7 @@ async function listSalesReps(env) {
   const { results } = await env.DB.prepare(`
     SELECT id, sales_code AS salesCode, name, line_user_id AS lineUserId,
            phone, status, invite_url AS inviteUrl, qr_url AS qrUrl,
+           external_invite_url AS externalInviteUrl,
            created_at AS createdAt, updated_at AS updatedAt
     FROM sales_reps
     ORDER BY created_at DESC
@@ -800,7 +803,8 @@ async function listSalesReps(env) {
   `).all();
   const rows = results || [];
   for (const row of rows) {
-    const freshInviteUrl = buildSalesInviteUrl(env, row.salesCode);
+    const externalInviteUrl = String(row.externalInviteUrl || "").trim();
+    const freshInviteUrl = externalInviteUrl || buildSalesInviteUrl(env, row.salesCode);
     const freshQrUrl = buildQrUrl(freshInviteUrl);
     if (row.inviteUrl !== freshInviteUrl || row.qrUrl !== freshQrUrl) {
       await env.DB.prepare(`
