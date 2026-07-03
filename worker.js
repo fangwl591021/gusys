@@ -1,4 +1,4 @@
-﻿const JSON_HEADERS = {
+const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
 };
@@ -35,6 +35,13 @@ export default {
       if (url.pathname === "/api/admin/line-messages" && request.method === "GET") return listAdminLineMessages(request, env);
       if (url.pathname === "/api/admin/settings" && request.method === "GET") return getAdminSettings(request, env);
       if (url.pathname === "/api/admin/settings" && request.method === "POST") return saveAdminSettings(request, env);
+      if (url.pathname === "/api/admin/broadcast-data" && request.method === "GET") return getBroadcastData(request, env);
+      if (url.pathname === "/api/admin/broadcast-tags" && request.method === "POST") return saveBroadcastTag(request, env);
+      if (url.pathname === "/api/admin/broadcast-tags/member" && request.method === "POST") return tagBroadcastMember(request, env);
+      if (url.pathname === "/api/admin/paid-broadcast" && request.method === "POST") return sendPaidBroadcast(request, env);
+      if (url.pathname === "/api/admin/reply-rules" && request.method === "GET") return listReplyRules(request, env);
+      if (url.pathname === "/api/admin/reply-rules" && request.method === "POST") return saveReplyRule(request, env);
+      if (url.pathname === "/api/admin/reply-rules" && request.method === "DELETE") return deleteReplyRule(request, env);
       if ((url.pathname === "/api/admin/webhook-events" || url.pathname === "/api/admin/webhooks") && request.method === "GET") return listAdminWebhookEvents(request, env);
       if (url.pathname === "/api/products" && request.method === "GET") return listProducts(request, env);
       if (url.pathname === "/api/products" && request.method === "POST") return createProduct(request, env);
@@ -135,7 +142,11 @@ async function handleLineWebhook(request, env, ctx) {
     receivedAt: new Date().toISOString(),
   });
 
-  const replyPayload = motherResult.replyPayload || buildLocalKeywordReplyPayload(events, env);
+  const ruleReplyPayload = motherResult.replyPayload ? null : await buildReplyRulePayload(env, events).catch(error => {
+    console.error(JSON.stringify({ level: "error", message: "reply_rule_failed", error: String(error?.message || error) }));
+    return null;
+  });
+  const replyPayload = motherResult.replyPayload || ruleReplyPayload || buildLocalKeywordReplyPayload(events, env);
   if (replyPayload && env.LINE_CHANNEL_ACCESS_TOKEN) {
     const replyResult = await replyLineMessage(env, replyPayload);
     return json({ ok: true, mother: motherResult.summary, reply: replyResult });
@@ -800,6 +811,307 @@ async function updateProduct(request, env, id) {
   return json({ ok: true, data: { id: productId, sku: product.sku, name } });
 }
 
+async function getBroadcastData(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const [tagRows, campaignRows, memberRows, ruleRows] = await Promise.all([
+    env.DB.prepare(`SELECT id, name, color, description, created_at AS createdAt, updated_at AS updatedAt FROM broadcast_tags ORDER BY created_at DESC`).all(),
+    env.DB.prepare(`SELECT id, title, message, message_type AS messageType, message_count AS messageCount, audience_json AS audienceJson, target_count AS targetCount, sent, failed, errors_json AS errorsJson, operator_uid AS operatorUid, test_mode AS testMode, created_at AS createdAt, created_ts AS createdTs FROM paid_broadcasts ORDER BY created_ts DESC LIMIT 200`).all(),
+    listBroadcastMembers(env),
+    listReplyRuleRows(env),
+  ]);
+  return json({ ok: true, data: {
+    tags: tagRows.results || [],
+    campaigns: (campaignRows.results || []).map(row => ({ ...row, audience: parseJson(row.audienceJson || '{}', {}), errors: parseJson(row.errorsJson || '[]', []) })),
+    members: memberRows,
+    modules: ruleRows,
+  } });
+}
+
+async function saveBroadcastTag(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const name = String(payload.name || '').trim();
+  if (!name) return json({ ok: false, error: 'missing_tag_name' }, 400);
+  const id = String(payload.id || name).trim();
+  const color = String(payload.color || '#06C755').trim();
+  const description = String(payload.description || '').trim();
+  await env.DB.prepare(`
+    INSERT INTO broadcast_tags (id, name, color, description, created_at, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(name) DO UPDATE SET color = excluded.color, description = excluded.description, updated_at = datetime('now')
+  `).bind(id, name, color, description).run();
+  return getBroadcastData(request, env);
+}
+
+async function tagBroadcastMember(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const lineUserId = String(payload.userId || payload.lineUserId || '').trim();
+  const tagName = String(payload.tagName || '').trim();
+  const enabled = payload.enabled !== false;
+  if (!lineUserId || !tagName) return json({ ok: false, error: 'missing_member_or_tag' }, 400);
+  if (enabled) {
+    await env.DB.prepare(`INSERT OR IGNORE INTO broadcast_member_tags (line_user_id, tag_name, created_at) VALUES (?, ?, datetime('now'))`).bind(lineUserId, tagName).run();
+  } else {
+    await env.DB.prepare(`DELETE FROM broadcast_member_tags WHERE line_user_id = ? AND tag_name = ?`).bind(lineUserId, tagName).run();
+  }
+  return getBroadcastData(request, env);
+}
+
+async function listBroadcastMembers(env) {
+  const { results } = await env.DB.prepare(`
+    SELECT c.line_user_id AS userId, c.display_name AS name, c.phone, c.address,
+           CASE WHEN c.customer_type = 'sales' THEN '業務' ELSE '一般會員' END AS memberTier,
+           c.customer_type AS customerType,
+           GROUP_CONCAT(bmt.tag_name) AS tagCsv
+    FROM customers c
+    LEFT JOIN broadcast_member_tags bmt ON bmt.line_user_id = c.line_user_id
+    WHERE c.line_user_id <> '' AND c.status <> 'deleted'
+    GROUP BY c.line_user_id
+    ORDER BY c.updated_at DESC
+    LIMIT 1000
+  `).all();
+  return (results || []).map(row => ({ ...row, broadcastTags: String(row.tagCsv || '').split(',').map(v => v.trim()).filter(Boolean) }));
+}
+
+function getMemberTags(member) {
+  if (Array.isArray(member?.broadcastTags)) return member.broadcastTags.map(v => String(v || '').trim()).filter(Boolean);
+  return String(member?.tagCsv || '').split(/[,，、\n]/).map(v => v.trim()).filter(Boolean);
+}
+
+function audienceMatchesMember(member, audience = {}) {
+  if (!member || !member.userId) return false;
+  const tag = String(audience.tag || '').trim();
+  if (tag && !getMemberTags(member).includes(tag)) return false;
+  const tier = String(audience.memberTier || '').trim();
+  if (tier && String(member.memberTier || '') !== tier) return false;
+  const keyword = String(audience.keyword || '').trim().toLowerCase();
+  if (keyword) {
+    const haystack = [member.name, member.phone, member.address, member.userId, member.memberTier].map(v => String(v || '').toLowerCase()).join(' ');
+    if (!haystack.includes(keyword)) return false;
+  }
+  return true;
+}
+
+function normalizeLineMessageUnit(message) {
+  if (!message || typeof message !== 'object') throw new Error('LINE message payload invalid');
+  const type = String(message.type || '').trim();
+  if (type === 'text') {
+    const text = String(message.text || '').trim();
+    if (!text) throw new Error('Text message is empty');
+    return { type: 'text', text: text.slice(0, 5000) };
+  }
+  if (type === 'image') {
+    const originalContentUrl = String(message.originalContentUrl || message.url || '').trim();
+    const previewImageUrl = String(message.previewImageUrl || originalContentUrl).trim();
+    if (!/^https:\/\//i.test(originalContentUrl) || !/^https:\/\//i.test(previewImageUrl)) throw new Error('Image message requires https image URL');
+    return { type: 'image', originalContentUrl, previewImageUrl };
+  }
+  if (type === 'flex') {
+    const altText = String(message.altText || '').trim();
+    if (!altText) throw new Error('Flex altText required');
+    if (!message.contents || typeof message.contents !== 'object') throw new Error('Flex contents required');
+    return { type: 'flex', altText: altText.slice(0, 400), contents: sanitizeLineFlexContents(message.contents) };
+  }
+  throw new Error(`Unsupported LINE message type: ${type}`);
+}
+
+function sanitizeLineFlexContents(contents) {
+  const cloned = JSON.parse(JSON.stringify(contents));
+  const visit = node => {
+    if (!node || typeof node !== 'object') return;
+    if (Object.prototype.hasOwnProperty.call(node, 'aspectRatio')) {
+      const normalized = String(node.aspectRatio || '').trim().replace(/\s*[xX]\s*/g, ':').replace(/\s+/g, '');
+      if (/^\d{1,5}(?:\.\d{1,4})?:\d{1,5}(?:\.\d{1,4})?$/.test(normalized)) node.aspectRatio = normalized;
+      else delete node.aspectRatio;
+    }
+    Object.values(node).forEach(value => Array.isArray(value) ? value.forEach(visit) : visit(value));
+  };
+  visit(cloned);
+  return cloned;
+}
+
+function buildLineMessageFromReplyRule(rule) {
+  const type = String(rule?.replyType || 'FLEX').trim().toUpperCase();
+  const payload = String(rule?.payload || '').trim();
+  if (type === 'TEXT') return normalizeLineMessageUnit({ type: 'text', text: payload });
+  if (type === 'IMAGE') return normalizeLineMessageUnit({ type: 'image', originalContentUrl: payload, previewImageUrl: String(rule?.previewImageUrl || payload).trim() });
+  const raw = parseJson(payload || '{}', null);
+  if (!raw) throw new Error('Flex JSON 格式錯誤');
+  const flexMessage = raw.type === 'flex' && raw.contents ? raw : { type: 'flex', altText: String(rule?.altText || rule?.moduleName || rule?.keyword || 'Flex 卡片').slice(0, 400), contents: raw };
+  return normalizeLineMessageUnit(flexMessage);
+}
+
+function normalizeBroadcastMessages(payload, title) {
+  const messages = [];
+  const text = String(payload?.message || '').trim();
+  if (text) messages.push(normalizeLineMessageUnit({ type: 'text', text }));
+  for (const rule of Array.isArray(payload?.modules) ? payload.modules : []) messages.push(buildLineMessageFromReplyRule(rule));
+  if (!messages.length) throw new Error('請輸入推播內容或選擇模組');
+  if (messages.length > 5) throw new Error('LINE 一次最多可推播 5 則訊息');
+  return messages;
+}
+
+function markBroadcastMessagesAsTest(messages, title) {
+  const nextMessages = JSON.parse(JSON.stringify(messages));
+  const prefix = '【測試訊息】';
+  if (nextMessages[0]?.type === 'text') nextMessages[0].text = `${prefix}\n${nextMessages[0].text}`.slice(0, 5000);
+  else if (nextMessages[0]?.type === 'flex') nextMessages[0].altText = `${prefix}${String(nextMessages[0].altText || title).slice(0, 380)}`;
+  else if (nextMessages.length < 5) nextMessages.unshift({ type: 'text', text: `${prefix} ${title}` });
+  return nextMessages;
+}
+
+function summarizeBroadcastMessages(messages, title) {
+  const firstText = messages.find(message => message.type === 'text')?.text;
+  if (firstText) return firstText.slice(0, 500);
+  const firstFlex = messages.find(message => message.type === 'flex')?.altText;
+  if (firstFlex) return firstFlex;
+  return title;
+}
+
+async function sendLineMulticast(env, recipients, messages) {
+  const token = String(env.LINE_CHANNEL_ACCESS_TOKEN || '').trim();
+  if (!token) throw new Error('Cloudflare 尚未綁定 LINE_CHANNEL_ACCESS_TOKEN');
+  const seen = new Set();
+  const list = (Array.isArray(recipients) ? recipients : []).map(user => ({ userId: String(user.userId || '').trim(), name: String(user.name || '').trim() })).filter(user => user.userId && !seen.has(user.userId) && seen.add(user.userId));
+  const ids = list.map(user => user.userId);
+  const errorDetails = [];
+  if (list.length <= 20) {
+    let sent = 0;
+    for (const user of list) {
+      const res = await fetch('https://api.line.me/v2/bot/message/push', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ to: user.userId, messages }) });
+      if (res.ok) sent += 1;
+      else errorDetails.push({ uid: user.userId, name: user.name || '', status: res.status, message: (await res.text()).slice(0, 500) });
+    }
+    return { sent, failed: ids.length - sent, total: ids.length, errors: errorDetails.map(item => `${item.name || item.uid}: HTTP ${item.status}: ${item.message}`), errorDetails };
+  }
+  let sent = 0;
+  const errors = [];
+  for (let i = 0; i < ids.length; i += 500) {
+    const to = ids.slice(i, i + 500);
+    const res = await fetch('https://api.line.me/v2/bot/message/multicast', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ to, messages }) });
+    if (res.ok) sent += to.length;
+    else errors.push(`HTTP ${res.status}: ${(await res.text()).slice(0, 240)}`);
+  }
+  return { sent, failed: ids.length - sent, total: ids.length, errors, errorDetails };
+}
+
+async function listReplyRuleRows(env) {
+  const { results } = await env.DB.prepare(`
+    SELECT id, module_name AS moduleName, keyword, reply_type AS replyType, payload,
+           preview_image_url AS previewImageUrl, flex_template AS flexTemplate, alt_text AS altText,
+           active, created_at AS createdAt, updated_at AS updatedAt
+    FROM reply_rules
+    ORDER BY updated_at DESC
+    LIMIT 500
+  `).all();
+  return (results || []).map(row => ({ ...row, active: Number(row.active) !== 0 }));
+}
+
+async function listReplyRules(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  return json({ ok: true, data: await listReplyRuleRows(env) });
+}
+
+async function saveReplyRule(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const replyType = String(payload.replyType || 'FLEX').trim().toUpperCase();
+  if (!['TEXT','IMAGE','FLEX'].includes(replyType)) return json({ ok: false, error: 'unsupported_reply_type' }, 400);
+  const payloadText = String(payload.payload || '').trim();
+  if (!payloadText) return json({ ok: false, error: 'missing_payload' }, 400);
+  const id = String(payload.id || `FR_${Date.now()}`).trim();
+  const moduleName = String(payload.moduleName || payload.keyword || '未命名模組').trim();
+  const keyword = String(payload.keyword || '').trim();
+  const previewImageUrl = String(payload.previewImageUrl || '').trim();
+  const flexTemplate = String(payload.flexTemplate || '').trim();
+  const altText = String(payload.altText || '').trim();
+  const active = payload.active === false ? 0 : 1;
+  await env.DB.prepare(`
+    INSERT INTO reply_rules (id, module_name, keyword, reply_type, payload, preview_image_url, flex_template, alt_text, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET module_name = excluded.module_name, keyword = excluded.keyword, reply_type = excluded.reply_type,
+      payload = excluded.payload, preview_image_url = excluded.preview_image_url, flex_template = excluded.flex_template,
+      alt_text = excluded.alt_text, active = excluded.active, updated_at = datetime('now')
+  `).bind(id, moduleName, keyword, replyType, payloadText, previewImageUrl, flexTemplate, altText, active).run();
+  return json({ ok: true, data: await listReplyRuleRows(env) });
+}
+
+async function deleteReplyRule(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const id = new URL(request.url).searchParams.get('id') || '';
+  if (!id) return json({ ok: false, error: 'missing_rule_id' }, 400);
+  await env.DB.prepare(`DELETE FROM reply_rules WHERE id = ?`).bind(id).run();
+  return json({ ok: true, data: await listReplyRuleRows(env) });
+}
+
+async function sendPaidBroadcast(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const title = String(payload.title || '').trim();
+  if (!title) return json({ ok: false, error: 'missing_broadcast_title' }, 400);
+  const allModules = await listReplyRuleRows(env);
+  const moduleIds = new Set((Array.isArray(payload.moduleIds) ? payload.moduleIds : []).map(id => String(id || '').trim()).filter(Boolean));
+  const modules = allModules.filter(rule => moduleIds.has(rule.id));
+  const normalizedMessages = normalizeBroadcastMessages({ ...payload, modules }, title);
+  const testMode = payload.testMode === true;
+  const allMembers = await listBroadcastMembers(env);
+  const audience = payload.audience || {};
+  let recipients = allMembers.filter(member => audienceMatchesMember(member, audience));
+  if (!testMode && Array.isArray(payload.selectedUids) && payload.selectedUids.length) {
+    const selected = new Set(payload.selectedUids.map(uid => String(uid || '').trim()).filter(Boolean));
+    recipients = recipients.filter(member => selected.has(String(member.userId || '').trim()));
+  }
+  if (testMode) {
+    const selectedForTest = Array.isArray(payload.selectedUids) ? String(payload.selectedUids[0] || '').trim() : '';
+    const testUid = String(payload.testUid || selectedForTest || env.BROADCAST_TEST_UID || '').trim();
+    if (!testUid) return json({ ok: false, error: 'missing_test_uid' }, 400);
+    recipients = [{ userId: testUid, name: '測試管理員' }];
+  }
+  if (!recipients.length) return json({ ok: false, error: 'empty_audience' }, 400);
+  const messages = testMode ? markBroadcastMessagesAsTest(normalizedMessages, title) : normalizedMessages;
+  const messageText = summarizeBroadcastMessages(messages, title);
+  const sendResult = await sendLineMulticast(env, recipients, messages);
+  const campaign = {
+    id: crypto.randomUUID(), title, message: messageText, messageType: modules.length ? (payload.message ? 'mixed' : 'module') : 'text',
+    messageCount: messages.length, audience, testMode, targetCount: recipients.length, sent: sendResult.sent,
+    failed: sendResult.failed, errors: sendResult.errors || [], operatorUid: '', createdAt: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }), createdTs: Date.now(),
+  };
+  if (!testMode) {
+    await env.DB.prepare(`
+      INSERT INTO paid_broadcasts (id, title, message, message_type, message_count, audience_json, target_count, sent, failed, errors_json, operator_uid, test_mode, created_at, created_ts)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+    `).bind(campaign.id, campaign.title, campaign.message, campaign.messageType, campaign.messageCount, JSON.stringify(audience), campaign.targetCount, campaign.sent, campaign.failed, JSON.stringify(campaign.errors), campaign.operatorUid, 0, campaign.createdTs).run();
+  }
+  return json({ ok: true, data: { success: sendResult.failed === 0, campaign } });
+}
+
+function splitReplyRuleTriggers(rule) {
+  return [rule?.keyword].map(value => String(value || '')).join('\n').split(/[\n,，、]/).map(value => value.trim()).filter(Boolean);
+}
+
+async function buildReplyRulePayload(env, events) {
+  if (!env.DB) return null;
+  const rules = (await listReplyRuleRows(env)).filter(rule => rule.active !== false);
+  if (!rules.length) return null;
+  for (const event of Array.isArray(events) ? events : []) {
+    const replyToken = String(event?.replyToken || '').trim();
+    if (!replyToken) continue;
+    const text = event?.type === 'message' && event?.message?.type === 'text' ? String(event.message.text || '').trim() : '';
+    const postback = event?.type === 'postback' ? String(event?.postback?.data || '').trim() : '';
+    const rule = rules.find(item => splitReplyRuleTriggers(item).some(trigger => trigger === text || trigger === postback));
+    if (!rule) continue;
+    return { replyToken, messages: [buildLineMessageFromReplyRule(rule)] };
+  }
+  return null;
+}
 async function countRows(env, table, where) {
   const sql = `SELECT COUNT(*) AS total FROM ${table} ${where ? "WHERE " + where : ""}`;
   const row = await env.DB.prepare(sql).first();
@@ -2155,7 +2467,7 @@ function renderHookteaAdminPage(env) {
   </style>
 </head>
 <body>
-  <aside class="sidebar"><div class="sidebar-brand"><div class="brand-title">Gusys 管理站</div><div class="brand-subtitle">HookTea 架構 / 經銷商 OA</div></div><nav class="nav" id="nav"><div class="nav-group-header">營運中心</div><button class="nav-item nav-active" data-view="dashboard">營運統計</button><button class="nav-item" data-view="customers">客戶 CRM</button><button class="nav-item" data-view="inventory">商城商品</button><button class="nav-item" data-view="orders">訂單維護</button><button class="nav-item" data-view="points">點數總表</button><div class="nav-group-header">經銷商中心</div><button class="nav-item" data-view="sales">業務 QR</button><button class="nav-item" data-view="reports">業績報表</button><div class="nav-group-header">營運工具</div><button class="nav-item" data-view="messages">LINE 訊息</button><button class="nav-item" data-view="ai">AI 後台監控</button><button class="nav-item" data-view="richmenu">圖文選單</button><button class="nav-item" data-view="webhooks">雙 Webhook</button><button class="nav-item" data-view="audit">操作紀錄</button><button class="nav-item" data-view="shop_modules">商城模組</button><button class="nav-item" data-view="settings">系統設定</button></nav></aside>
+  <aside class="sidebar"><div class="sidebar-brand"><div class="brand-title">Gusys 管理站</div><div class="brand-subtitle">HookTea 架構 / 經銷商 OA</div></div><nav class="nav" id="nav"><div class="nav-group-header">營運中心</div><button class="nav-item nav-active" data-view="dashboard">營運統計</button><button class="nav-item" data-view="customers">客戶 CRM</button><button class="nav-item" data-view="inventory">商城商品</button><button class="nav-item" data-view="orders">訂單維護</button><button class="nav-item" data-view="points">點數總表</button><div class="nav-group-header">經銷商中心</div><button class="nav-item" data-view="sales">業務 QR</button><button class="nav-item" data-view="reports">業績報表</button><div class="nav-group-header">營運工具</div><button class="nav-item" data-view="messages">LINE 訊息</button><button class="nav-item" data-view="ai">AI 後台監控</button><button class="nav-item" data-view="paid_broadcast">付費推播</button><button class="nav-item" data-view="flex_rules">機器人與專區卡片</button><button class="nav-item" data-view="richmenu">圖文選單</button><button class="nav-item" data-view="webhooks">雙 Webhook</button><button class="nav-item" data-view="audit">操作紀錄</button><button class="nav-item" data-view="shop_modules">商城模組</button><button class="nav-item" data-view="settings">系統設定</button></nav></aside>
   <main class="main-content"><header class="page-header"><div><div class="page-title" id="pageTitle">營運統計</div><div class="page-subtitle" id="pageSubtitle">以 HookTea 後台結構管理 CRM、商城、點數與經銷商歸屬</div></div><div class="header-actions"><span class="status-badge" id="systemStatus">連線中</span><input id="adminToken" type="password" placeholder="Admin token"><button class="btn-outline" id="saveToken">儲存</button><button class="btn-green-main" id="refreshAll">更新</button></div></header><div class="content">
     <section class="view active" id="view-dashboard"><div class="stats-grid" id="metrics"></div><section class="panel"><div class="panel-header"><div class="section-title">營運摘要</div><span class="muted" id="lastRefresh"></span></div><div class="panel-body"><div class="ops-list" id="opsSummary"></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">最近 LINE 訊息</div><button class="btn-outline btn-small" data-jump="messages">查看全部</button></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>用戶</th><th>內容</th><th>Thread</th></tr></thead><tbody id="dashboardMessages"></tbody></table></div></section></section>
     <section class="view" id="view-sales"><section class="panel"><div class="panel-header"><div class="section-title">新增業務與專屬 QR</div><span class="muted" id="salesStatus"></span></div><div class="panel-body"><div class="form-grid"><input id="salesName" placeholder="業務姓名"><input id="salesPhone" placeholder="電話"><input id="salesLine" placeholder="LINE User ID"><input id="salesCode" placeholder="業務代碼，可空白"></div><button class="btn-green-main" id="createSales">建立業務 QR</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">業務清單</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>業務</th><th>代碼</th><th>QR</th><th>邀請連結</th><th>狀態</th></tr></thead><tbody id="salesRows"></tbody></table></div></section></section>
@@ -2167,7 +2479,8 @@ function renderHookteaAdminPage(env) {
     <section class="view" id="view-messages"><section class="panel"><div class="panel-header"><div class="section-title">LINE 訊息紀錄</div><div><button class="btn-green-main btn-small" id="runAi">AI 分析最新訊息</button> <span class="muted" id="aiRunStatus"></span></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>LINE UID</th><th>內容</th><th>Thread</th></tr></thead><tbody id="messageRows"></tbody></table></div></section></section>
     <section class="view" id="view-ai"><section class="panel"><div class="panel-header"><div class="section-title">AI 後台監控</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>風險</th><th>分類</th><th>摘要</th><th>建議動作</th></tr></thead><tbody id="aiRows"></tbody></table></div></section></section>
     <section class="view" id="view-webhooks"><section class="panel"><div class="panel-header"><div class="section-title">雙 Webhook 轉送狀態</div><span class="muted">LINE OA -> Gusys Worker -> 母站</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>來源</th><th>訊息</th><th>母站狀態</th><th>摘要</th></tr></thead><tbody id="webhookRows"></tbody></table></div></section></section>
-    <section class="view" id="view-richmenu"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/menu.html?v=hooktea-port-20260703" style="width:100%;height:100%;border:0;display:block"></iframe></section></section>
+    <section class="view" id="view-paid_broadcast"><div class="shop-layout"><div><section class="panel"><div class="panel-header"><div><div class="section-title">建立付費推播</div><div class="muted">依會員標籤與基本資料分群，送出 LINE 訊息。</div></div><span class="status-badge">LINE OA 樣式</span></div><div class="panel-body"><div class="form-grid"><label class="full-span"><span class="input-label">推播名稱</span><input id="broadcastTitle" placeholder="例如：完整階段會員續約提醒"></label><label class="full-span"><span class="input-label">訊息內容</span><textarea id="broadcastMessage" maxlength="4900" placeholder="請輸入要推播給受眾的 LINE 文字訊息"></textarea><div class="muted" id="broadcastCharCount" style="text-align:right">0 / 4900</div></label></div><div class="ops-item" style="background:#eff6ff;border-color:#bfdbfe"><div class="ops-label">選擇已建立模組（可複選）</div><div id="broadcastModuleOptions" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px"></div><div class="settings-note">可與上方文字一起送出；LINE 一次最多 5 則訊息。</div></div><div class="ops-item" style="margin-top:14px;background:#f8fafc"><div class="ops-label">受眾條件</div><div class="form-grid" style="margin-top:10px"><label><span class="input-label">標籤</span><select id="broadcastTag"><option value="">全部標籤</option></select></label><label><span class="input-label">會員等級</span><select id="broadcastTier"><option value="">全部等級</option></select></label><label class="full-span"><span class="input-label">關鍵字</span><input id="broadcastKeyword" placeholder="姓名、電話、地址、UID"></label></div></div><div class="stats-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-top:14px"><div class="stat-card"><div class="stat-label">預估受眾</div><div class="stat-value" id="broadcastAudienceCount">0</div></div><div class="stat-card"><div class="stat-label">已勾選 UID</div><div class="stat-value" id="broadcastSelectedCount">0</div></div><div class="stat-card"><div class="stat-label">歷史推播</div><div class="stat-value" id="broadcastHistoryCount">0</div></div></div><div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px"><button class="btn-outline" id="reloadBroadcastData">重新整理</button><button class="btn-outline" id="sendBroadcastTest">測試訊息</button><button class="btn-green-main" id="sendBroadcast">確認推播</button><span class="muted" id="broadcastStatus"></span></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">受眾預覽</div><div><label class="muted"><input type="checkbox" id="broadcastSelectAll"> 全選目前名單</label> <button class="btn-outline btn-small" id="broadcastClearSelection">清空</button></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>會員</th><th>LINE UID</th><th>等級</th><th>標籤</th><th>選取</th></tr></thead><tbody id="broadcastAudienceRows"></tbody></table></div></section></div><aside><section class="panel"><div class="panel-header"><div class="section-title">標籤管理</div></div><div class="panel-body"><div style="display:grid;grid-template-columns:1fr auto;gap:10px"><input id="newBroadcastTag" placeholder="新增標籤，例如：已購買完整階段"><button class="btn-green-main" id="saveBroadcastTag">＋</button></div><div id="broadcastTagChips" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div><div style="border-top:1px solid #eef2f7;margin-top:18px;padding-top:14px"><div class="ops-label">替會員下標籤</div><select id="selectedBroadcastTag" style="width:100%;margin-top:8px"></select><input id="broadcastMemberSearch" style="width:100%;margin-top:10px" placeholder="搜尋會員姓名、電話、UID"><div id="broadcastMemberTagRows" style="max-height:320px;overflow:auto;border:1px solid #eef2f7;border-radius:8px;margin-top:10px"></div></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">推播紀錄</div><button class="btn-outline btn-small" id="reloadBroadcastHistory">更新</button></div><div id="broadcastCampaignRows"></div></section></aside></div></section>
+    <section class="view" id="view-flex_rules"><section class="panel"><div class="panel-header"><div><div class="section-title">自動回覆與會員專區卡片</div><div class="muted">先建立模組檔案，再於推播或圖文選單中選用。</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn-outline" data-new-rule="FLEX:v0">新增 V0</button><button class="btn-outline" data-new-rule="FLEX:v1">新增 V1</button><button class="btn-outline" data-new-rule="FLEX:v2">新增 V2</button><button class="btn-outline" data-new-rule="FLEX:v3">新增 V3</button><button class="btn-outline" data-new-rule="FLEX:v4">新增 V4</button><button class="btn-outline" data-new-rule="IMAGE">圖片</button><button class="btn-outline" data-new-rule="TEXT">文字</button></div></div><div class="panel-body"><div class="form-grid"><input id="flexRuleSearch" placeholder="搜尋模組名稱、觸發字、ID"><select id="flexRuleTypeFilter"><option value="ALL">全部格式</option><option value="FLEX">FLEX 卡片</option><option value="IMAGE">圖片訊息</option><option value="TEXT">純文字</option></select><select id="flexRuleStatusFilter"><option value="ALL">全部狀態</option><option value="ACTIVE">啟用中</option><option value="INACTIVE">停用中</option></select></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>模組檔案</th><th>觸發字 / Postback</th><th>格式</th><th>狀態</th><th>建立時間</th><th>操作</th></tr></thead><tbody id="replyRuleRows"></tbody></table></div></section><section class="panel"><div class="panel-header"><div class="section-title" id="replyRuleFormTitle">新增模組</div><div><span class="muted" id="replyRuleStatus"></span> <button class="btn-outline btn-small" id="cancelReplyRuleEdit">清空</button> <button class="btn-green-main btn-small" id="saveReplyRule">儲存觸發規則</button></div></div><div class="panel-body"><input id="replyRuleId" type="hidden"><div class="form-grid"><input id="replyRuleName" placeholder="模組名稱"><input id="replyRuleKeyword" placeholder="觸發字 / Postback"><select id="replyRuleType"><option value="FLEX">FLEX 卡片</option><option value="IMAGE">圖片訊息</option><option value="TEXT">純文字</option></select><select id="replyRuleActive"><option value="true">啟用</option><option value="false">停用</option></select><input id="replyRuleTemplate" placeholder="Flex 範本 v0-v4"><input id="replyRulePreview" placeholder="圖片預覽 URL"><input id="replyRuleAlt" placeholder="Flex altText"></div><textarea id="replyRulePayload" class="rich-textarea" placeholder="FLEX JSON / 圖片 URL / 文字內容"></textarea></div></section></section>    <section class="view" id="view-richmenu"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/menu.html?v=hooktea-port-20260703" style="width:100%;height:100%;border:0;display:block"></iframe></section></section>
     <section class="view" id="view-audit"><section class="panel"><div class="panel-header"><div class="section-title">操作紀錄</div><span class="status-badge">Webhook 事件</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>類型</th><th>目前紀錄來源</th><th>狀態</th></tr></thead><tbody><tr><td>LINE 訊息</td><td>/api/admin/line-messages</td><td>已串接</td></tr><tr><td>母站轉送</td><td>/api/admin/webhooks</td><td>已串接</td></tr><tr><td>後台操作</td><td>audit_logs</td><td>待建立</td></tr></tbody></table></div></section></section>
         <section class="view" id="view-shop_modules">
       <div class="settings-wrap" style="max-width:1180px">
@@ -2244,8 +2557,8 @@ function renderHookteaAdminPage(env) {
 </div><div class="login-cover" id="loginCover"><div class="login-box"><div class="login-title">需要 Admin token</div><div class="muted">請輸入 Worker 環境變數 ADMIN_TOKEN。</div><input id="loginToken" type="password" placeholder="Admin token"><button class="btn-green-main" id="loginSubmit">進入後台</button></div></div>
   <script>
     const publicUrl = ${JSON.stringify(publicUrl)}; const motherUrl = ${JSON.stringify(motherUrl)};
-    const titles = {dashboard:["營運統計","即時掌握業務、客戶、商品、LINE 訊息與母站轉送"],sales:["業務 QR","建立業務專屬 QR，作為日後業績歸屬依據"],customers:["客戶 CRM","所有加入官方帳號者自動建檔，並追蹤互動與業務歸屬"],inventory:["商城商品","管理商品、售價、成本與安全庫存"],reports:["業績報表","每月業務績效與毛利彙整"],orders:["訂單維護","HookTea 同款訂單工作區，待串接 Gusys 訂單資料表"],points:["點數總表","對接母站點數 API，集中查詢會員點數紀錄"],messages:["LINE 訊息","查詢 LINE OA 對話紀錄"],ai:["AI 後台監控","追蹤高風險訊息、分類與建議動作"],webhooks:["雙 Webhook","查看母站轉送狀態，不顯示整段 HTML 原始碼"],richmenu:["圖文選單","規劃 LINE 圖文選單與 LIFF 入口"],audit:["操作紀錄","記錄後台操作與 webhook 重要事件"],shop_modules:["商城模組","集中管理 HookTea 前台商城模組"],settings:["系統參數設定","紅包獎勵、LIFF、金流、WordPress 點數與圖文選單連結"]};
-    let adminToken = localStorage.getItem("gusys_admin_token") || ""; let adminCustomers = []; let adminProducts = []; let activeCustomer = null; let activePointCustomer = null; const pointBalanceCache = {}; let richMenus = []; let activeRichMenu = null; let hookteaSettings = null; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
+    const titles = {dashboard:["營運統計","即時掌握業務、客戶、商品、LINE 訊息與母站轉送"],sales:["業務 QR","建立業務專屬 QR，作為日後業績歸屬依據"],customers:["客戶 CRM","所有加入官方帳號者自動建檔，並追蹤互動與業務歸屬"],inventory:["商城商品","管理商品、售價、成本與安全庫存"],reports:["業績報表","每月業務績效與毛利彙整"],orders:["訂單維護","HookTea 同款訂單工作區，待串接 Gusys 訂單資料表"],points:["點數總表","對接母站點數 API，集中查詢會員點數紀錄"],messages:["LINE 訊息","查詢 LINE OA 對話紀錄"],ai:["AI 後台監控","追蹤高風險訊息、分類與建議動作"],webhooks:["雙 Webhook","查看母站轉送狀態，不顯示整段 HTML 原始碼"],richmenu:["圖文選單","規劃 LINE 圖文選單與 LIFF 入口"],audit:["操作紀錄","記錄後台操作與 webhook 重要事件"],shop_modules:["商城模組","集中管理 HookTea 前台商城模組"],paid_broadcast:["付費推播","依會員標籤與基本資料分群，送出 LINE 訊息"],flex_rules:["機器人與專區卡片","建立自動回覆模組檔案，供推播或圖文選單選用"],settings:["系統參數設定","紅包獎勵、LIFF、金流、WordPress 點數與圖文選單連結"]};
+    let adminToken = localStorage.getItem("gusys_admin_token") || ""; let adminCustomers = []; let adminProducts = []; let broadcastData = {tags:[],campaigns:[],members:[],modules:[]}; let replyRules = []; let activeReplyRule = null; let activeCustomer = null; let activePointCustomer = null; const pointBalanceCache = {}; let richMenus = []; let activeRichMenu = null; let hookteaSettings = null; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
     const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); const money = v => new Intl.NumberFormat("zh-TW").format(Number(v || 0)); const on = (sel, event, fn) => { const el = qs(sel); if(el) el.addEventListener(event, fn); return el; };
     qs("#adminToken").value = adminToken; function headers(){ return adminToken ? {"x-admin-token":adminToken} : {}; } function badge(text,tone){ return '<span class="status-badge '+(tone||"")+'">'+esc(text)+'</span>'; }
     async function api(path,opt){ const init = opt || {}; init.headers = Object.assign({"content-type":"application/json"}, headers(), init.headers || {}); const res = await fetch(path, init); const data = await res.json().catch(() => ({ok:false,error:"bad_json"})); if(!res.ok || !data.ok){ const err = new Error(data.error || data.message || ("HTTP "+res.status)); err.status = res.status; throw err; } return data.data || data; }
@@ -2254,7 +2567,7 @@ function renderHookteaAdminPage(env) {
     on("#saveToken", "click", () => { adminToken = qs("#adminToken").value.trim(); localStorage.setItem("gusys_admin_token", adminToken); qs("#loginCover").style.display = "none"; loadAll(); }); on("#loginSubmit", "click", () => { adminToken = qs("#loginToken").value.trim(); qs("#adminToken").value = adminToken; localStorage.setItem("gusys_admin_token", adminToken); qs("#loginCover").style.display = "none"; loadAll(); }); on("#refreshAll", "click", () => loadAll());
     on("#createSales", "click", async () => { try{ await api("/api/sales/reps",{method:"POST",body:JSON.stringify({name:qs("#salesName").value,phone:qs("#salesPhone").value,lineUserId:qs("#salesLine").value,salesCode:qs("#salesCode").value})}); qs("#salesStatus").textContent = "已建立"; await Promise.all([loadSales(),loadSummary()]); }catch(err){ qs("#salesStatus").textContent = err.message; } });
     on("#createProduct", "click", saveProductForm); on("#cancelProductEdit", "click", resetProductForm);
-    on("#runAi", "click", async () => { qs("#aiRunStatus").textContent = "分析中"; try{ await api("/api/ai-monitor/analyze",{method:"POST",body:JSON.stringify({limit:30})}); qs("#aiRunStatus").textContent = "完成"; await loadAi(); }catch(err){ qs("#aiRunStatus").textContent = err.message; } }); on("#loadReport", "click", () => loadReports()); on("#reloadSettings", "click", () => loadSettings()); on("#saveSettings", "click", () => saveSettings("settingsStatus")); on("#saveShopModules", "click", () => saveSettings("shopModuleStatus")); on("#customerSearch", "input", () => renderCustomers()); on("#pointsSearch", "input", () => renderPointMembers()); on("#refreshPoints", "click", () => loadSelectedPointLedger()); on("#crmClose", "click", closeCrmModal); on("#crmCancel", "click", closeCrmModal); on("#crmSave", "click", saveCustomerCrm); on("#syncProfiles", "click", syncProfiles); on("#grantPoints", "click", () => submitPointAdjust("earn")); on("#deductPoints", "click", () => submitPointAdjust("spend"));
+    on("#runAi", "click", async () => { qs("#aiRunStatus").textContent = "分析中"; try{ await api("/api/ai-monitor/analyze",{method:"POST",body:JSON.stringify({limit:30})}); qs("#aiRunStatus").textContent = "完成"; await loadAi(); }catch(err){ qs("#aiRunStatus").textContent = err.message; } }); on("#loadReport", "click", () => loadReports()); on("#reloadSettings", "click", () => loadSettings()); on("#saveSettings", "click", () => saveSettings("settingsStatus")); on("#saveShopModules", "click", () => saveSettings("shopModuleStatus")); on("#customerSearch", "input", () => renderCustomers()); on("#pointsSearch", "input", () => renderPointMembers()); on("#refreshPoints", "click", () => loadSelectedPointLedger()); on("#crmClose", "click", closeCrmModal); on("#crmCancel", "click", closeCrmModal); on("#crmSave", "click", saveCustomerCrm); on("#syncProfiles", "click", syncProfiles); on("#grantPoints", "click", () => submitPointAdjust("earn")); on("#deductPoints", "click", () => submitPointAdjust("spend")); on("#reloadBroadcastData", "click", loadActionModules); on("#reloadBroadcastHistory", "click", loadActionModules); on("#saveBroadcastTag", "click", saveBroadcastTag); on("#sendBroadcast", "click", () => sendPaidBroadcast(false)); on("#sendBroadcastTest", "click", () => sendPaidBroadcast(true)); on("#broadcastMessage", "input", () => { const el=qs("#broadcastMessage"); const c=qs("#broadcastCharCount"); if(c&&el)c.textContent=el.value.length+" / 4900"; }); ["#broadcastTag","#broadcastTier","#broadcastKeyword","#broadcastMemberSearch"].forEach(sel => on(sel, "input", renderBroadcast)); on("#broadcastSelectAll", "change", e => { qsa("[data-broadcast-uid]").forEach(cb => cb.checked = e.target.checked); renderBroadcastCounts(); }); on("#broadcastClearSelection", "click", () => { qsa("[data-broadcast-uid]").forEach(cb => cb.checked = false); renderBroadcastCounts(); }); on("#saveReplyRule", "click", saveReplyRule); on("#cancelReplyRuleEdit", "click", () => setReplyRuleForm(null)); ["#flexRuleSearch","#flexRuleTypeFilter","#flexRuleStatusFilter"].forEach(sel => on(sel, "input", renderReplyRules));
     function showUnauthorized(){ qs("#systemStatus").textContent = "需要 token"; qs("#systemStatus").className = "status-badge warn"; qs("#loginCover").style.display = "flex"; } function tableEmpty(cols,text){ return '<tr><td colspan="'+cols+'" class="empty">'+esc(text)+'</td></tr>'; }
     async function loadSummary(){ const s = await api("/api/admin/summary"); qs("#metrics").innerHTML = [["業務",s.sales],["用戶",s.customers],["商品",s.products],["LINE 訊息",s.messages],["母站轉送",s.webhooks],["高風險",s.highRisk]].map(i => '<div class="stat-card"><div class="stat-label">'+esc(i[0])+'</div><div class="stat-value">'+money(i[1])+'</div></div>').join(""); const latest = s.latestMother || {}; const motherState = latest.motherStatus ? "HTTP " + latest.motherStatus : "尚無紀錄"; qs("#opsSummary").innerHTML = [["Worker",publicUrl],["LINE Webhook",publicUrl+"/line-webhook"],["母站 Webhook",motherUrl],["最近母站轉送",motherState],["最近訊息",latest.messageText||"尚無"],["最近時間",latest.createdAt||"尚無"]].map(i => '<div class="ops-item"><div class="ops-label">'+esc(i[0])+'</div><div class="ops-value">'+esc(i[1])+'</div></div>').join(""); qs("#lastRefresh").textContent = new Date().toLocaleString("zh-TW"); qs("#systemStatus").textContent = "正常"; qs("#systemStatus").className = "status-badge"; }
     async function loadSales(){ const rows = await api("/api/sales/reps"); qs("#salesRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong><div class="muted">'+esc(r.phone)+'</div></td><td class="mono">'+esc(r.salesCode)+'</td><td>'+(r.qrUrl?'<img class="qr" src="'+esc(r.qrUrl)+'" alt="QR">':"-")+'</td><td><a href="'+esc(r.inviteUrl)+'" target="_blank">開啟</a><div class="mono summary-text">'+esc(r.inviteUrl)+'</div></td><td>'+badge(r.status||"active")+'</td></tr>').join("") || tableEmpty(5,"尚無業務"); }
@@ -2278,6 +2591,24 @@ function renderHookteaAdminPage(env) {
     async function loadMessages(){ const rows = await api("/api/admin/line-messages"); const html = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); qs("#messageRows").innerHTML = html; qs("#dashboardMessages").innerHTML = rows.slice(0,6).map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); }
     async function loadWebhooks(){ const rows = await api("/api/admin/webhooks"); qs("#webhookRows").innerHTML = rows.map(r => { const s = r.summary || {}; const tone = s.invalidSignature ? "danger" : (s.hasReplyPayload ? "" : "warn"); const label = s.invalidSignature ? "簽章錯誤" : (s.hasReplyPayload ? "有回覆" : "已轉送"); const detail = s.contentType || "無 content-type"; return '<tr><td>'+esc(r.createdAt)+'</td><td>'+esc(r.source)+'</td><td class="summary-text">'+esc(r.messageText||"")+'</td><td>'+esc(r.motherStatus||"")+'</td><td>'+badge(label,tone)+'<div class="muted">'+esc(detail)+'</div></td></tr>'; }).join("") || tableEmpty(5,"尚無紀錄"); }
     async function loadAi(){ const rows = await api("/api/ai-monitor/insights?limit=100"); qs("#aiRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td>'+badge(r.riskLevel||"-", r.riskLevel === "high" ? "danger" : (r.riskLevel === "medium" ? "warn" : ""))+'</td><td>'+esc(r.category||"")+'</td><td class="summary-text">'+esc(r.summary||"")+'</td><td class="summary-text">'+esc(r.recommendedAction||"")+'</td></tr>').join("") || tableEmpty(5,"尚無 AI 洞察"); }
+    function memberTags(m){ return Array.isArray(m.broadcastTags) ? m.broadcastTags : []; }
+    function broadcastAudienceRows(){ const tag=(qs("#broadcastTag")?.value||"").trim(); const tier=(qs("#broadcastTier")?.value||"").trim(); const keyword=(qs("#broadcastKeyword")?.value||"").trim().toLowerCase(); return (broadcastData.members||[]).filter(m => { if(tag && !memberTags(m).includes(tag)) return false; if(tier && String(m.memberTier||"")!==tier) return false; if(keyword){ const hay=[m.name,m.phone,m.address,m.userId,m.memberTier].join(" ").toLowerCase(); if(!hay.includes(keyword)) return false; } return true; }); }
+    function renderBroadcast(){ const tags=broadcastData.tags||[]; const members=broadcastData.members||[]; const tagOptions='<option value="">全部標籤</option>'+tags.map(t=>'<option value="'+esc(t.name)+'">'+esc(t.name)+'</option>').join(""); const oldTag=qs("#broadcastTag")?.value||""; if(qs("#broadcastTag")){ qs("#broadcastTag").innerHTML=tagOptions; qs("#broadcastTag").value=oldTag; } const oldSelected=qs("#selectedBroadcastTag")?.value||""; if(qs("#selectedBroadcastTag")){ qs("#selectedBroadcastTag").innerHTML=tags.map(t=>'<option value="'+esc(t.name)+'">'+esc(t.name)+'</option>').join("")||'<option value="">請先建立標籤</option>'; qs("#selectedBroadcastTag").value=oldSelected || (tags[0]?.name||""); } const tiers=[...new Set(members.map(m=>String(m.memberTier||"").trim()).filter(Boolean))]; const oldTier=qs("#broadcastTier")?.value||""; if(qs("#broadcastTier")){ qs("#broadcastTier").innerHTML='<option value="">全部等級</option>'+tiers.map(t=>'<option value="'+esc(t)+'">'+esc(t)+'</option>').join(""); qs("#broadcastTier").value=oldTier; } qs("#broadcastTagChips").innerHTML=tags.map(t=>'<button class="btn-outline btn-small" data-select-tag="'+esc(t.name)+'">'+esc(t.name)+' <span class="muted">'+money(members.filter(m=>memberTags(m).includes(t.name)).length)+'</span></button>').join("") || '<span class="muted">尚未建立標籤</span>'; qsa("[data-select-tag]").forEach(btn=>btn.onclick=()=>{ qs("#selectedBroadcastTag").value=btn.dataset.selectTag; renderBroadcast(); }); const moduleCount=(broadcastData.modules||[]).filter(m=>m.active!==false).length; qs("#broadcastModuleOptions").innerHTML=(broadcastData.modules||[]).filter(m=>m.active!==false).map(m=>'<label class="ops-item" style="display:flex;gap:10px;align-items:flex-start;margin:0"><input type="checkbox" data-broadcast-module="'+esc(m.id)+'"><span><strong>'+esc(m.moduleName||m.keyword||m.id)+'</strong><div class="muted">'+esc(m.replyType)+(m.keyword?' · '+esc(m.keyword):'')+'</div></span></label>').join("") || '<div class="empty">尚未建立可推播模組，請到「機器人與專區卡片」新增。</div>'; renderBroadcastAudience(); renderBroadcastMembers(); renderBroadcastCampaigns(); qs("#broadcastHistoryCount").textContent=money((broadcastData.campaigns||[]).length); }
+    function renderBroadcastAudience(){ const selected=new Set(qsa("[data-broadcast-uid]:checked").map(cb=>cb.value)); const rows=broadcastAudienceRows(); if(!selected.size) rows.slice(0,80).forEach(m=>selected.add(m.userId)); qs("#broadcastAudienceRows").innerHTML=rows.slice(0,80).map(m=>'<tr><td><strong>'+esc(m.name||"未命名會員")+'</strong></td><td class="mono">'+esc(m.userId)+'</td><td>'+esc(m.memberTier||"未分級")+'</td><td>'+memberTags(m).map(t=>badge(t)).join(" ")+'</td><td><input type="checkbox" data-broadcast-uid value="'+esc(m.userId)+'" '+(selected.has(m.userId)?'checked':'')+'></td></tr>').join("") || tableEmpty(5,"目前條件沒有符合的受眾"); qsa("[data-broadcast-uid]").forEach(cb=>cb.onchange=renderBroadcastCounts); renderBroadcastCounts(); }
+    function renderBroadcastCounts(){ qs("#broadcastAudienceCount").textContent=money(broadcastAudienceRows().length); qs("#broadcastSelectedCount").textContent=money(qsa("[data-broadcast-uid]:checked").length); }
+    function renderBroadcastMembers(){ const q=(qs("#broadcastMemberSearch")?.value||"").trim().toLowerCase(); const tag=qs("#selectedBroadcastTag")?.value||""; const rows=(broadcastData.members||[]).filter(m=>!q||[m.name,m.phone,m.userId,m.memberTier].join(" ").toLowerCase().includes(q)).slice(0,160); qs("#broadcastMemberTagRows").innerHTML=rows.map(m=>'<label style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border-bottom:1px solid #eef2f7"><span><strong>'+esc(m.name||"未命名會員")+'</strong><div class="mono muted">'+esc(m.userId)+'</div></span><input type="checkbox" data-tag-member="'+esc(m.userId)+'" '+(tag&&memberTags(m).includes(tag)?'checked':'')+'></label>').join("") || '<div class="empty">查無會員</div>'; qsa("[data-tag-member]").forEach(cb=>cb.onchange=()=>toggleBroadcastMemberTag(cb.dataset.tagMember, tag, cb.checked)); }
+    function renderBroadcastCampaigns(){ qs("#broadcastCampaignRows").innerHTML=(broadcastData.campaigns||[]).map(c=>'<div class="point-log"><div><div class="point-log-title">'+esc(c.title)+'</div><div class="point-log-date">'+esc(c.createdAt)+'</div><div style="margin-top:8px">'+badge('成功 '+money(c.sent||0))+" "+badge('失敗 '+money(c.failed||0),c.failed?'danger':'')+" "+badge('受眾 '+money(c.targetCount||0),'warn')+'</div></div></div>').join("") || '<div class="empty">尚無推播紀錄</div>'; }
+    async function loadActionModules(){ try{ broadcastData=await api("/api/admin/broadcast-data"); replyRules=broadcastData.modules||[]; renderBroadcast(); renderReplyRules(); }catch(err){ if(qs("#broadcastStatus")) qs("#broadcastStatus").textContent=err.message; if(qs("#replyRuleStatus")) qs("#replyRuleStatus").textContent=err.message; } }
+    async function saveBroadcastTag(){ const name=qs("#newBroadcastTag").value.trim(); if(!name) return; qs("#broadcastStatus").textContent="儲存中"; try{ broadcastData=await api("/api/admin/broadcast-tags",{method:"POST",body:JSON.stringify({name})}); qs("#newBroadcastTag").value=""; qs("#broadcastStatus").textContent="標籤已儲存"; renderBroadcast(); }catch(err){ qs("#broadcastStatus").textContent=err.message; } }
+    async function toggleBroadcastMemberTag(userId, tagName, enabled){ if(!tagName) return; try{ broadcastData=await api("/api/admin/broadcast-tags/member",{method:"POST",body:JSON.stringify({userId,tagName,enabled})}); renderBroadcast(); }catch(err){ qs("#broadcastStatus").textContent=err.message; } }
+    async function sendPaidBroadcast(testMode){ const selectedUids=qsa("[data-broadcast-uid]:checked").map(cb=>cb.value); const moduleIds=qsa("[data-broadcast-module]:checked").map(cb=>cb.dataset.broadcastModule); const payload={title:qs("#broadcastTitle").value,message:qs("#broadcastMessage").value,moduleIds,selectedUids,testMode,audience:{tag:qs("#broadcastTag").value,memberTier:qs("#broadcastTier").value,keyword:qs("#broadcastKeyword").value}}; qs("#broadcastStatus").textContent=testMode?"測試送出中":"推播送出中"; try{ const result=await api("/api/admin/paid-broadcast",{method:"POST",body:JSON.stringify(payload)}); qs("#broadcastStatus").textContent=(testMode?"測試完成":"推播完成")+"：成功 "+money(result.campaign.sent)+" / 失敗 "+money(result.campaign.failed); await loadActionModules(); }catch(err){ qs("#broadcastStatus").textContent=err.message; } }
+    function defaultFlexPayload(template){ const label={v0:"ACTION 圖片卡",v1:"ACTION 影音卡",v2:"ACTION會員專區卡片",v3:"ACTION 清單卡",v4:"ACTION 群組卡"}[template]||"ACTION會員專區卡片"; return JSON.stringify({type:"bubble",body:{type:"box",layout:"vertical",contents:[{type:"text",text:label,weight:"bold",size:"xl"},{type:"text",text:"會員專區",margin:"md",color:"#666666"},{type:"button",style:"primary",color:"#06C755",action:{type:"message",label:"開啟",text:"ACTION會員專區"}}]}},null,2); }
+    function setReplyRuleForm(rule){ activeReplyRule=rule; qs("#replyRuleId").value=rule?.id||""; qs("#replyRuleName").value=rule?.moduleName||""; qs("#replyRuleKeyword").value=rule?.keyword||""; qs("#replyRuleType").value=rule?.replyType||"FLEX"; qs("#replyRuleActive").value=rule?.active===false?"false":"true"; qs("#replyRuleTemplate").value=rule?.flexTemplate||""; qs("#replyRulePreview").value=rule?.previewImageUrl||""; qs("#replyRuleAlt").value=rule?.altText||""; qs("#replyRulePayload").value=rule?.payload||""; qs("#replyRuleFormTitle").textContent=rule?"編輯模組":"新增模組"; }
+    function newReplyRule(kind){ const parts=String(kind||"FLEX:v2").split(":"); const type=parts[0]||"FLEX"; const template=parts[1]||""; setReplyRuleForm({replyType:type,flexTemplate:template,moduleName:type==="FLEX"?("ACTION會員專區卡片 "+template.toUpperCase()):(type==="IMAGE"?"圖片訊息":"純文字"),keyword:type==="FLEX"?"ACTION會員專區":"",altText:"會員專區",active:true,payload:type==="FLEX"?defaultFlexPayload(template):(type==="IMAGE"?"https://":"")}); }
+    function renderReplyRules(){ const q=(qs("#flexRuleSearch")?.value||"").toLowerCase(); const type=qs("#flexRuleTypeFilter")?.value||"ALL"; const status=qs("#flexRuleStatusFilter")?.value||"ALL"; const rows=(replyRules||[]).filter(r=>(type==="ALL"||r.replyType===type)&&(status==="ALL"||(status==="ACTIVE"?r.active!==false:r.active===false))&&(!q||[r.id,r.moduleName,r.keyword].join(" ").toLowerCase().includes(q))); qs("#replyRuleRows").innerHTML=rows.map(r=>'<tr><td><strong>'+esc(r.moduleName||r.keyword||r.id)+'</strong><div class="mono muted">'+esc(r.id)+'</div></td><td>'+esc(r.keyword||"未設定")+'</td><td>'+badge(r.replyType==="FLEX"?"FLEX 卡片":(r.replyType==="IMAGE"?"圖片訊息":"純文字"))+(r.replyType==="FLEX"?' '+badge(String(r.flexTemplate||"v1").toUpperCase(),"warn"):"")+'</td><td>'+badge(r.active!==false?"啟用":"停用",r.active!==false?"":"danger")+'</td><td class="mono">'+esc(r.createdAt||r.updatedAt||"")+'</td><td><button class="btn-outline btn-small" data-edit-rule="'+esc(r.id)+'">編輯</button> <button class="btn-outline btn-small" data-copy-rule="'+esc(r.id)+'">複製</button> <button class="btn-outline btn-small" data-delete-rule="'+esc(r.id)+'">刪除</button></td></tr>').join("")||tableEmpty(6,"找不到符合條件的模組"); qsa("[data-edit-rule]").forEach(btn=>btn.onclick=()=>setReplyRuleForm(replyRules.find(r=>r.id===btn.dataset.editRule))); qsa("[data-copy-rule]").forEach(btn=>btn.onclick=()=>{ const r=replyRules.find(x=>x.id===btn.dataset.copyRule); if(r) setReplyRuleForm({...r,id:"",moduleName:(r.moduleName||"")+" 複製"}); }); qsa("[data-delete-rule]").forEach(btn=>btn.onclick=()=>deleteReplyRule(btn.dataset.deleteRule)); }
+    async function saveReplyRule(){ const payload={id:qs("#replyRuleId").value,moduleName:qs("#replyRuleName").value,keyword:qs("#replyRuleKeyword").value,replyType:qs("#replyRuleType").value,active:qs("#replyRuleActive").value!=="false",flexTemplate:qs("#replyRuleTemplate").value,previewImageUrl:qs("#replyRulePreview").value,altText:qs("#replyRuleAlt").value,payload:qs("#replyRulePayload").value}; qs("#replyRuleStatus").textContent="儲存中"; try{ replyRules=await api("/api/admin/reply-rules",{method:"POST",body:JSON.stringify(payload)}); broadcastData.modules=replyRules; qs("#replyRuleStatus").textContent="模組已儲存"; renderReplyRules(); renderBroadcast(); }catch(err){ qs("#replyRuleStatus").textContent=err.message; } }
+    async function deleteReplyRule(id){ if(!confirm("刪除此模組？")) return; try{ replyRules=await api("/api/admin/reply-rules?id="+encodeURIComponent(id),{method:"DELETE"}); broadcastData.modules=replyRules; renderReplyRules(); renderBroadcast(); }catch(err){ qs("#replyRuleStatus").textContent=err.message; } }
+    qsa("[data-new-rule]").forEach(btn => btn.onclick = () => newReplyRule(btn.dataset.newRule));
     function settingFields(){ return qsa("[data-setting]"); }
     function fillSettings(s){ hookteaSettings=s||{}; settingFields().forEach(el => { const key = el.dataset.setting; el.value = hookteaSettings[key] ?? ""; }); renderSettingsPreview(); renderLiffLinks(); }
     function collectSettings(){ const next = {...(hookteaSettings||{})}; settingFields().forEach(el => { next[el.dataset.setting] = el.value ?? ""; }); return next; }
@@ -2288,7 +2619,7 @@ function renderHookteaAdminPage(env) {
     settingFields().forEach(el => el.addEventListener("input", () => { const key = el.dataset.setting; settingFields().forEach(other => { if(other !== el && other.dataset.setting === key) other.value = el.value; }); hookteaSettings = collectSettings(); renderSettingsPreview(); renderLiffLinks(); }));
     async function loadSettings(){ const status = qs("#settingsStatus"); const shopStatus = qs("#shopModuleStatus"); if(status) status.textContent="讀取中"; if(shopStatus) shopStatus.textContent="讀取中"; try{ const data=await api("/api/admin/settings"); fillSettings(data.settings||{}); const label=data.updatedAt?"已載入 "+data.updatedAt:"已載入預設值"; if(status) status.textContent=label; if(shopStatus) shopStatus.textContent=label; }catch(err){ if(status) status.textContent=err.message; if(shopStatus) shopStatus.textContent=err.message; } }
     async function saveSettings(statusId){ const target = qs("#"+(statusId||"settingsStatus")); if(target) target.textContent="儲存中"; try{ const saved=await api("/api/admin/settings",{method:"POST",body:JSON.stringify({settings:collectSettings()})}); fillSettings(saved.settings||{}); if(target) target.textContent="設定已儲存"; }catch(err){ if(target) target.textContent=err.message; } }    async function loadReports(){ const period = qs("#reportPeriod").value || new Date().toISOString().slice(0,7); qs("#reportPeriod").value = period; const rows = await api("/api/reports/monthly-sales?period=" + encodeURIComponent(period)); qs("#reportRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.salesName||"-")+'</td><td class="mono">'+esc(r.salesCode||"")+'</td><td>'+money(r.orderCount)+'</td><td>'+money(r.revenue)+'</td><td>'+money(r.grossProfit)+'</td></tr>').join("") || tableEmpty(5,"尚無業績資料"); }
-    async function loadAll(){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadMessages(),loadWebhooks(),loadAi(),loadReports(),loadSettings()]); }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } } }
+    async function loadAll(){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadMessages(),loadWebhooks(),loadAi(),loadReports(),loadSettings(),loadActionModules()]); }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } } }
     setView("dashboard"); loadAll();
   </script>
 </body>
