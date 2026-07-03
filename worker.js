@@ -1,4 +1,4 @@
-const JSON_HEADERS = {
+﻿const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
 };
@@ -23,6 +23,7 @@ export default {
       if (url.pathname === "/menu.html") return renderRichMenuEditorPage();
       if (url.pathname === "/") return renderHome(env);
       if (url.pathname === "/admin") return renderHookteaAdminPage(env);
+      if (url.pathname === "/shop") return renderShopPage(env);
       if (url.pathname === "/hub-test") return handleHubTest(env);
       if (url.pathname === "/line-webhook") return handleLineWebhook(request, env, ctx);
       if (url.pathname === "/sales/invite") return renderSalesInvitePage(request, env);
@@ -37,6 +38,7 @@ export default {
       if ((url.pathname === "/api/admin/webhook-events" || url.pathname === "/api/admin/webhooks") && request.method === "GET") return listAdminWebhookEvents(request, env);
       if (url.pathname === "/api/products" && request.method === "GET") return listProducts(request, env);
       if (url.pathname === "/api/products" && request.method === "POST") return createProduct(request, env);
+      if (url.pathname.startsWith("/api/products/") && request.method === "PATCH") return updateProduct(request, env, decodeURIComponent(url.pathname.slice("/api/products/".length)));
       if (url.pathname === "/api/sales/reps" && request.method === "POST") return createSalesRep(request, env);
       if (url.pathname === "/api/sales/reps" && request.method === "GET") return listSalesReps(env);
       if (url.pathname === "/api/sales/bind" && (request.method === "POST" || request.method === "GET")) return bindCustomerToSalesRep(request, env);
@@ -756,19 +758,46 @@ async function createProduct(request, env) {
   const name = String(payload.name || "").trim();
   if (!name) return json({ ok: false, error: "missing_name" }, 400);
   const id = crypto.randomUUID();
-  const sku = String(payload.sku || "").trim();
-  const category = String(payload.category || "").trim();
-  const unit = String(payload.unit || "件").trim() || "件";
-  const price = Number.parseInt(payload.price || 0, 10) || 0;
-  const cost = Number.parseInt(payload.cost || 0, 10) || 0;
-  const stockQty = Number.parseInt(payload.stockQty ?? payload.stock_qty ?? 0, 10) || 0;
-  const safetyStockQty = Number.parseInt(payload.safetyStockQty ?? payload.safety_stock_qty ?? 0, 10) || 0;
+  const product = normalizeProductPayload(payload);
   await env.DB.prepare(`
     INSERT INTO products (
       id, company_id, sku, name, category, unit, price, cost, stock_qty, safety_stock_qty, status, created_at, updated_at
-    ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))
-  `).bind(id, sku, name, category, unit, price, cost, stockQty, safetyStockQty).run();
-  return json({ ok: true, data: { id, sku, name } });
+    ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `).bind(id, product.sku, name, product.category, product.unit, product.price, product.cost, product.stockQty, product.safetyStockQty, product.status).run();
+  return json({ ok: true, data: { id, sku: product.sku, name } });
+}
+
+function normalizeProductPayload(payload) {
+  const statusRaw = String(payload.status || "active").trim();
+  return {
+    sku: String(payload.sku || "").trim(),
+    category: String(payload.category || "").trim(),
+    unit: String(payload.unit || "件").trim() || "件",
+    price: Number.parseInt(payload.price || 0, 10) || 0,
+    cost: Number.parseInt(payload.cost || 0, 10) || 0,
+    stockQty: Number.parseInt(payload.stockQty ?? payload.stock_qty ?? 0, 10) || 0,
+    safetyStockQty: Number.parseInt(payload.safetyStockQty ?? payload.safety_stock_qty ?? 0, 10) || 0,
+    status: statusRaw === "inactive" ? "inactive" : "active",
+  };
+}
+
+async function updateProduct(request, env, id) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const productId = String(id || "").trim();
+  if (!productId) return json({ ok: false, error: "missing_product_id" }, 400);
+  const payload = await request.json().catch(() => ({}));
+  const name = String(payload.name || "").trim();
+  if (!name) return json({ ok: false, error: "missing_name" }, 400);
+  const product = normalizeProductPayload(payload);
+  const result = await env.DB.prepare(`
+    UPDATE products
+    SET sku = ?, name = ?, category = ?, unit = ?, price = ?, cost = ?,
+        stock_qty = ?, safety_stock_qty = ?, status = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).bind(product.sku, name, product.category, product.unit, product.price, product.cost, product.stockQty, product.safetyStockQty, product.status, productId).run();
+  if (!result.meta?.changes) return json({ ok: false, error: "product_not_found" }, 404);
+  return json({ ok: true, data: { id: productId, sku: product.sku, name } });
 }
 
 async function countRows(env, table, where) {
@@ -2068,6 +2097,42 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+async function renderShopPage(env) {
+  requireDb(env);
+  const { results } = await env.DB.prepare(`
+    SELECT id, sku, name, category, unit, price, stock_qty AS stockQty, status
+    FROM products
+    WHERE status = 'active'
+    ORDER BY category, updated_at DESC, created_at DESC
+    LIMIT 200
+  `).all();
+  const products = results || [];
+  const categories = [...new Set(products.map(p => p.category || "未分類"))];
+  const groups = categories.map(category => {
+    const cards = products.filter(p => (p.category || "未分類") === category).map(p => `
+      <article class="product-card">
+        <div class="product-media">${escapeHtml(String(p.name || "商品").slice(0, 1))}</div>
+        <div class="product-body">
+          <div class="product-meta">${escapeHtml(p.sku || "")}</div>
+          <h3>${escapeHtml(p.name || "未命名商品")}</h3>
+          <div class="product-row"><strong>$${escapeHtml(new Intl.NumberFormat("zh-TW").format(Number(p.price || 0)))}</strong><span>庫存 ${escapeHtml(p.stockQty ?? 0)} ${escapeHtml(p.unit || "件")}</span></div>
+        </div>
+      </article>`).join("");
+    return `<section class="category"><h2>${escapeHtml(category)}</h2><div class="grid">${cards}</div></section>`;
+  }).join("");
+  return new Response(`<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gusys 商城</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#050505;color:#fff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.app{max-width:1080px;margin:0 auto;padding:28px 18px 56px}.top{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:28px}.brand{font-size:28px;font-weight:900}.muted{color:#9ca3af}.category{margin-top:28px}.category h2{font-size:20px;margin:0 0 14px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.product-card{background:#111;border:1px solid #262626;border-radius:12px;overflow:hidden}.product-media{height:150px;background:linear-gradient(135deg,#064e3b,#111827);display:flex;align-items:center;justify-content:center;font-size:56px;font-weight:900;color:#facc15}.product-body{padding:14px}.product-meta{color:#8d8d8d;font-size:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.product-card h3{font-size:17px;line-height:1.35;min-height:46px;margin:8px 0 14px}.product-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.product-row strong{color:#fde68a;font-size:22px}.product-row span{color:#a7f3d0;font-size:13px;font-weight:800}.empty{border:1px dashed #333;border-radius:12px;padding:40px;text-align:center;color:#9ca3af}@media(max-width:760px){.top{align-items:flex-start;flex-direction:column}.grid{grid-template-columns:1fr 1fr}.product-media{height:120px}}@media(max-width:480px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body><main class="app"><header class="top"><div><div class="brand">Gusys 商城</div><div class="muted">HookTea 商品展示</div></div><div class="muted">${products.length} 件商品</div></header>${groups || '<div class="empty">目前沒有上架商品</div>'}</main></body>
+</html>`, { headers: HTML_HEADERS });
+}
 function renderHookteaAdminPage(env) {
   const publicUrl = env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev";
   const motherUrl = env.MOTHER_WEBHOOK_URL || "";
@@ -2095,7 +2160,7 @@ function renderHookteaAdminPage(env) {
     <section class="view active" id="view-dashboard"><div class="stats-grid" id="metrics"></div><section class="panel"><div class="panel-header"><div class="section-title">營運摘要</div><span class="muted" id="lastRefresh"></span></div><div class="panel-body"><div class="ops-list" id="opsSummary"></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">最近 LINE 訊息</div><button class="btn-outline btn-small" data-jump="messages">查看全部</button></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>用戶</th><th>內容</th><th>Thread</th></tr></thead><tbody id="dashboardMessages"></tbody></table></div></section></section>
     <section class="view" id="view-sales"><section class="panel"><div class="panel-header"><div class="section-title">新增業務與專屬 QR</div><span class="muted" id="salesStatus"></span></div><div class="panel-body"><div class="form-grid"><input id="salesName" placeholder="業務姓名"><input id="salesPhone" placeholder="電話"><input id="salesLine" placeholder="LINE User ID"><input id="salesCode" placeholder="業務代碼，可空白"></div><button class="btn-green-main" id="createSales">建立業務 QR</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">業務清單</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>業務</th><th>代碼</th><th>QR</th><th>邀請連結</th><th>狀態</th></tr></thead><tbody id="salesRows"></tbody></table></div></section></section>
     <section class="view" id="view-customers"><section class="panel"><div class="panel-header"><div class="section-title">客戶 CRM</div></div><div class="crm-toolbar"><input id="customerSearch" class="crm-search" placeholder="搜尋姓名、電話、ID..."><button class="btn-outline">隱藏名單</button><button class="btn-outline" id="syncProfiles">重新同步 LINE 資料</button><button class="btn-green-main">會員 Excel 下載</button><span class="muted" id="syncProfileStatus"></span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>姓名</th><th>LINE UID</th><th>目前等級</th><th>註冊日期</th><th>操作</th></tr></thead><tbody id="customerRows"></tbody></table></div></section></section>
-    <section class="view" id="view-inventory"><section class="panel"><div class="panel-header"><div class="section-title">新增商品</div><span class="muted" id="productStatus"></span></div><div class="panel-body"><div class="form-grid"><input id="productSku" placeholder="SKU"><input id="productCategory" placeholder="分類"><input id="productName" placeholder="商品名稱"><input id="productPrice" type="number" placeholder="售價"><input id="productCost" type="number" placeholder="成本"><input id="productStock" type="number" placeholder="庫存"><input id="productSafety" type="number" placeholder="安全庫存"></div><button class="btn-green-main" id="createProduct">建立商品</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">商品庫存</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>商品</th><th>SKU</th><th>分類</th><th>售價</th><th>庫存</th><th>狀態</th></tr></thead><tbody id="productRows"></tbody></table></div></section></section>
+    <section class="view" id="view-inventory"><section class="panel"><div class="panel-header"><div class="section-title" id="productFormTitle">新增商品</div><span class="muted" id="productStatus"></span></div><div class="panel-body"><input id="productId" type="hidden"><div class="form-grid"><input id="productSku" placeholder="SKU"><input id="productCategory" placeholder="分類"><input id="productName" placeholder="商品名稱"><input id="productPrice" type="number" placeholder="售價"><input id="productCost" type="number" placeholder="成本"><input id="productStock" type="number" placeholder="庫存"><input id="productSafety" type="number" placeholder="安全庫存"><select id="productStatusValue"><option value="active">上架</option><option value="inactive">下架</option></select></div><button class="btn-green-main" id="createProduct">建立商品</button> <button class="btn-outline" id="cancelProductEdit" style="display:none">取消編輯</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">商品庫存</div><a class="btn-outline btn-small" href="/shop" target="_blank">前台商城</a></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>商品</th><th>SKU</th><th>分類</th><th>售價</th><th>庫存</th><th>狀態</th><th>操作</th></tr></thead><tbody id="productRows"></tbody></table></div></section></section>
     <section class="view" id="view-reports"><section class="panel"><div class="panel-header"><div class="section-title">每月業績報表</div><div><input id="reportPeriod" type="month"><button class="btn-outline btn-small" id="loadReport">查詢</button></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>業務</th><th>代碼</th><th>訂單數</th><th>營收</th><th>毛利</th></tr></thead><tbody id="reportRows"></tbody></table></div></section></section>
     <section class="view" id="view-orders"><section class="panel"><div class="panel-header"><div class="section-title">訂單維護</div><span class="status-badge warn">待串接</span></div><div class="panel-body"><div class="ops-list"><div class="ops-item"><div class="ops-label">HookTea 對應功能</div><div class="ops-value">訂單查詢、付款狀態、出貨狀態、取消保護</div></div><div class="ops-item"><div class="ops-label">Gusys 下一步</div><div class="ops-value">建立 orders / order_items，並綁定 sales_rep_id 供業績歸屬</div></div><div class="ops-item"><div class="ops-label">目前來源</div><div class="ops-value">尚未有 Gusys 訂單 API</div></div></div></div></section></section>
     <section class="view" id="view-points"><section class="panel"><div class="panel-header"><div class="section-title">點數總表</div><div><span class="status-badge warn">母站 API</span> <button class="btn-outline btn-small" id="refreshPoints">重新讀取</button></div></div><div class="crm-toolbar"><input id="pointsSearch" class="crm-search" placeholder="搜尋會員姓名、LINE UID..."><span class="muted" id="pointsStatus">請選擇會員</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>會員</th><th>LINE UID</th><th>業務歸屬</th><th>目前點數</th><th>操作</th></tr></thead><tbody id="pointsMemberRows"></tbody></table></div></section><section class="panel"><div class="panel-header"><div class="section-title">點數流水</div><span class="muted" id="pointsLedgerTitle">尚未選擇會員</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>會員</th><th>類型</th><th>異動原因</th><th>點數</th><th>餘額</th><th>LINE UID</th></tr></thead><tbody id="pointsLedgerRows"></tbody></table></div></section></section>
@@ -2180,7 +2245,7 @@ function renderHookteaAdminPage(env) {
   <script>
     const publicUrl = ${JSON.stringify(publicUrl)}; const motherUrl = ${JSON.stringify(motherUrl)};
     const titles = {dashboard:["營運統計","即時掌握業務、客戶、商品、LINE 訊息與母站轉送"],sales:["業務 QR","建立業務專屬 QR，作為日後業績歸屬依據"],customers:["客戶 CRM","所有加入官方帳號者自動建檔，並追蹤互動與業務歸屬"],inventory:["商城商品","管理商品、售價、成本與安全庫存"],reports:["業績報表","每月業務績效與毛利彙整"],orders:["訂單維護","HookTea 同款訂單工作區，待串接 Gusys 訂單資料表"],points:["點數總表","對接母站點數 API，集中查詢會員點數紀錄"],messages:["LINE 訊息","查詢 LINE OA 對話紀錄"],ai:["AI 後台監控","追蹤高風險訊息、分類與建議動作"],webhooks:["雙 Webhook","查看母站轉送狀態，不顯示整段 HTML 原始碼"],richmenu:["圖文選單","規劃 LINE 圖文選單與 LIFF 入口"],audit:["操作紀錄","記錄後台操作與 webhook 重要事件"],shop_modules:["商城模組","集中管理 HookTea 前台商城模組"],settings:["系統參數設定","紅包獎勵、LIFF、金流、WordPress 點數與圖文選單連結"]};
-    let adminToken = localStorage.getItem("gusys_admin_token") || ""; let adminCustomers = []; let activeCustomer = null; let activePointCustomer = null; const pointBalanceCache = {}; let richMenus = []; let activeRichMenu = null; let hookteaSettings = null; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
+    let adminToken = localStorage.getItem("gusys_admin_token") || ""; let adminCustomers = []; let adminProducts = []; let activeCustomer = null; let activePointCustomer = null; const pointBalanceCache = {}; let richMenus = []; let activeRichMenu = null; let hookteaSettings = null; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
     const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); const money = v => new Intl.NumberFormat("zh-TW").format(Number(v || 0)); const on = (sel, event, fn) => { const el = qs(sel); if(el) el.addEventListener(event, fn); return el; };
     qs("#adminToken").value = adminToken; function headers(){ return adminToken ? {"x-admin-token":adminToken} : {}; } function badge(text,tone){ return '<span class="status-badge '+(tone||"")+'">'+esc(text)+'</span>'; }
     async function api(path,opt){ const init = opt || {}; init.headers = Object.assign({"content-type":"application/json"}, headers(), init.headers || {}); const res = await fetch(path, init); const data = await res.json().catch(() => ({ok:false,error:"bad_json"})); if(!res.ok || !data.ok){ const err = new Error(data.error || data.message || ("HTTP "+res.status)); err.status = res.status; throw err; } return data.data || data; }
@@ -2188,7 +2253,7 @@ function renderHookteaAdminPage(env) {
     on("#nav", "click", e => { const btn = e.target.closest(".nav-item"); if(btn) setView(btn.dataset.view); }); document.body.addEventListener("click", e => { const jump = e.target.closest("[data-jump]"); if(jump) setView(jump.dataset.jump); });
     on("#saveToken", "click", () => { adminToken = qs("#adminToken").value.trim(); localStorage.setItem("gusys_admin_token", adminToken); qs("#loginCover").style.display = "none"; loadAll(); }); on("#loginSubmit", "click", () => { adminToken = qs("#loginToken").value.trim(); qs("#adminToken").value = adminToken; localStorage.setItem("gusys_admin_token", adminToken); qs("#loginCover").style.display = "none"; loadAll(); }); on("#refreshAll", "click", () => loadAll());
     on("#createSales", "click", async () => { try{ await api("/api/sales/reps",{method:"POST",body:JSON.stringify({name:qs("#salesName").value,phone:qs("#salesPhone").value,lineUserId:qs("#salesLine").value,salesCode:qs("#salesCode").value})}); qs("#salesStatus").textContent = "已建立"; await Promise.all([loadSales(),loadSummary()]); }catch(err){ qs("#salesStatus").textContent = err.message; } });
-    on("#createProduct", "click", async () => { try{ await api("/api/products",{method:"POST",body:JSON.stringify({sku:qs("#productSku").value,category:qs("#productCategory").value,name:qs("#productName").value,price:qs("#productPrice").value,cost:qs("#productCost").value,stockQty:qs("#productStock").value,safetyStockQty:qs("#productSafety").value})}); qs("#productStatus").textContent = "已建立"; await Promise.all([loadProducts(),loadSummary()]); }catch(err){ qs("#productStatus").textContent = err.message; } });
+    on("#createProduct", "click", saveProductForm); on("#cancelProductEdit", "click", resetProductForm);
     on("#runAi", "click", async () => { qs("#aiRunStatus").textContent = "分析中"; try{ await api("/api/ai-monitor/analyze",{method:"POST",body:JSON.stringify({limit:30})}); qs("#aiRunStatus").textContent = "完成"; await loadAi(); }catch(err){ qs("#aiRunStatus").textContent = err.message; } }); on("#loadReport", "click", () => loadReports()); on("#reloadSettings", "click", () => loadSettings()); on("#saveSettings", "click", () => saveSettings("settingsStatus")); on("#saveShopModules", "click", () => saveSettings("shopModuleStatus")); on("#customerSearch", "input", () => renderCustomers()); on("#pointsSearch", "input", () => renderPointMembers()); on("#refreshPoints", "click", () => loadSelectedPointLedger()); on("#crmClose", "click", closeCrmModal); on("#crmCancel", "click", closeCrmModal); on("#crmSave", "click", saveCustomerCrm); on("#syncProfiles", "click", syncProfiles); on("#grantPoints", "click", () => submitPointAdjust("earn")); on("#deductPoints", "click", () => submitPointAdjust("spend"));
     function showUnauthorized(){ qs("#systemStatus").textContent = "需要 token"; qs("#systemStatus").className = "status-badge warn"; qs("#loginCover").style.display = "flex"; } function tableEmpty(cols,text){ return '<tr><td colspan="'+cols+'" class="empty">'+esc(text)+'</td></tr>'; }
     async function loadSummary(){ const s = await api("/api/admin/summary"); qs("#metrics").innerHTML = [["業務",s.sales],["用戶",s.customers],["商品",s.products],["LINE 訊息",s.messages],["母站轉送",s.webhooks],["高風險",s.highRisk]].map(i => '<div class="stat-card"><div class="stat-label">'+esc(i[0])+'</div><div class="stat-value">'+money(i[1])+'</div></div>').join(""); const latest = s.latestMother || {}; const motherState = latest.motherStatus ? "HTTP " + latest.motherStatus : "尚無紀錄"; qs("#opsSummary").innerHTML = [["Worker",publicUrl],["LINE Webhook",publicUrl+"/line-webhook"],["母站 Webhook",motherUrl],["最近母站轉送",motherState],["最近訊息",latest.messageText||"尚無"],["最近時間",latest.createdAt||"尚無"]].map(i => '<div class="ops-item"><div class="ops-label">'+esc(i[0])+'</div><div class="ops-value">'+esc(i[1])+'</div></div>').join(""); qs("#lastRefresh").textContent = new Date().toLocaleString("zh-TW"); qs("#systemStatus").textContent = "正常"; qs("#systemStatus").className = "status-badge"; }
@@ -2204,7 +2269,12 @@ function renderHookteaAdminPage(env) {
     function renderRichPreview(){ let cfg; try{ cfg=readRichConfig(); }catch(_){ cfg={areas:[]}; } const areas=Array.isArray(cfg.areas)?cfg.areas:[]; qs("#richPreview").innerHTML = (areas.length?areas:defaultRichConfig().areas).slice(0,6).map((a,i)=>'<div class="rich-preview-cell">'+esc(a.action?.text||a.action?.label||a.action?.data||('區塊 '+(i+1)))+'</div>').join(""); }
     async function saveRichMenu(){ try{ const payload={id:activeRichMenu?.id||"",name:qs("#richMenuName").value,aliasId:qs("#richMenuAlias").value,chatBarText:qs("#richMenuChatBar").value,imageDataUrl:qs("#richMenuImage").value,config:readRichConfig()}; const saved=await api("/api/admin/rich-menus",{method:"POST",body:JSON.stringify(payload)}); qs("#richMenuStatus").textContent="已儲存"; activeRichMenu=saved; await loadRichMenus(); setRichForm(saved); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }
     async function deployRichMenu(){ if(!confirm("部署後會成為 LINE 官方帳號預設圖文選單，確定送出？")) return; try{ await saveRichMenu(); const result=await api("/api/admin/rich-menus/deploy",{method:"POST",body:JSON.stringify({id:activeRichMenu?.id})}); qs("#richMenuStatus").textContent="已部署："+(result.richMenuId||""); await loadRichMenus(); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }
-    async function deleteRichMenu(){ if(!activeRichMenu?.id){ qs("#richMenuStatus").textContent="尚未選擇檔案"; return; } if(!confirm("刪除此圖文選單檔案？")) return; try{ await api("/api/admin/rich-menus?id="+encodeURIComponent(activeRichMenu.id),{method:"DELETE"}); activeRichMenu=null; qs("#richMenuStatus").textContent="已刪除"; await loadRichMenus(); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }    async function loadProducts(){ const rows = await api("/api/products"); qs("#productRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong></td><td class="mono">'+esc(r.sku)+'</td><td>'+esc(r.category||"")+'</td><td>'+money(r.price)+'</td><td>'+money(r.stockQty)+' / '+money(r.safetyStockQty)+'</td><td>'+badge(r.status||"active", Number(r.stockQty) <= Number(r.safetyStockQty) ? "warn" : "")+'</td></tr>').join("") || tableEmpty(6,"尚無商品"); }
+    async function deleteRichMenu(){ if(!activeRichMenu?.id){ qs("#richMenuStatus").textContent="尚未選擇檔案"; return; } if(!confirm("刪除此圖文選單檔案？")) return; try{ await api("/api/admin/rich-menus?id="+encodeURIComponent(activeRichMenu.id),{method:"DELETE"}); activeRichMenu=null; qs("#richMenuStatus").textContent="已刪除"; await loadRichMenus(); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }
+    function productPayload(){ return {sku:qs("#productSku").value,category:qs("#productCategory").value,name:qs("#productName").value,price:qs("#productPrice").value,cost:qs("#productCost").value,stockQty:qs("#productStock").value,safetyStockQty:qs("#productSafety").value,status:qs("#productStatusValue").value}; }
+    function resetProductForm(){ qs("#productId").value=""; ["#productSku","#productCategory","#productName","#productPrice","#productCost","#productStock","#productSafety"].forEach(sel => qs(sel).value=""); qs("#productStatusValue").value="active"; qs("#productFormTitle").textContent="新增商品"; qs("#createProduct").textContent="建立商品"; qs("#cancelProductEdit").style.display="none"; qs("#productStatus").textContent=""; }
+    function editProduct(id){ const p = adminProducts.find(item => item.id === id); if(!p) return; qs("#productId").value=p.id; qs("#productSku").value=p.sku||""; qs("#productCategory").value=p.category||""; qs("#productName").value=p.name||""; qs("#productPrice").value=p.price||0; qs("#productCost").value=p.cost||0; qs("#productStock").value=p.stockQty||0; qs("#productSafety").value=p.safetyStockQty||0; qs("#productStatusValue").value=p.status||"active"; qs("#productFormTitle").textContent="編輯商品"; qs("#createProduct").textContent="儲存商品"; qs("#cancelProductEdit").style.display="inline-block"; qs("#productStatus").textContent="正在編輯：" + (p.name || p.sku || p.id); }
+    async function saveProductForm(){ const id = qs("#productId").value.trim(); const payload = productPayload(); try{ await api(id ? ("/api/products/" + encodeURIComponent(id)) : "/api/products",{method:id?"PATCH":"POST",body:JSON.stringify(payload)}); qs("#productStatus").textContent = id ? "已更新" : "已建立"; resetProductForm(); await Promise.all([loadProducts(),loadSummary()]); }catch(err){ qs("#productStatus").textContent = err.message; } }
+    async function loadProducts(){ adminProducts = await api("/api/products"); qs("#productRows").innerHTML = adminProducts.map(r => '<tr><td><strong>'+esc(r.name)+'</strong></td><td class="mono">'+esc(r.sku)+'</td><td>'+esc(r.category||"")+'</td><td>'+money(r.price)+'</td><td>'+money(r.stockQty)+' / '+money(r.safetyStockQty)+'</td><td>'+badge(r.status||"active", Number(r.stockQty) <= Number(r.safetyStockQty) ? "warn" : "")+'</td><td><button class="btn-outline btn-small" data-edit-product="'+esc(r.id)+'">編輯</button></td></tr>').join("") || tableEmpty(7,"尚無商品"); qsa("[data-edit-product]").forEach(btn => btn.onclick = () => editProduct(btn.dataset.editProduct)); }
     async function loadMessages(){ const rows = await api("/api/admin/line-messages"); const html = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); qs("#messageRows").innerHTML = html; qs("#dashboardMessages").innerHTML = rows.slice(0,6).map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); }
     async function loadWebhooks(){ const rows = await api("/api/admin/webhooks"); qs("#webhookRows").innerHTML = rows.map(r => { const s = r.summary || {}; const tone = s.invalidSignature ? "danger" : (s.hasReplyPayload ? "" : "warn"); const label = s.invalidSignature ? "簽章錯誤" : (s.hasReplyPayload ? "有回覆" : "已轉送"); const detail = s.contentType || "無 content-type"; return '<tr><td>'+esc(r.createdAt)+'</td><td>'+esc(r.source)+'</td><td class="summary-text">'+esc(r.messageText||"")+'</td><td>'+esc(r.motherStatus||"")+'</td><td>'+badge(label,tone)+'<div class="muted">'+esc(detail)+'</div></td></tr>'; }).join("") || tableEmpty(5,"尚無紀錄"); }
     async function loadAi(){ const rows = await api("/api/ai-monitor/insights?limit=100"); qs("#aiRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td>'+badge(r.riskLevel||"-", r.riskLevel === "high" ? "danger" : (r.riskLevel === "medium" ? "warn" : ""))+'</td><td>'+esc(r.category||"")+'</td><td class="summary-text">'+esc(r.summary||"")+'</td><td class="summary-text">'+esc(r.recommendedAction||"")+'</td></tr>').join("") || tableEmpty(5,"尚無 AI 洞察"); }
