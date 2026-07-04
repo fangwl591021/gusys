@@ -49,6 +49,7 @@ export default {
       if (url.pathname === "/api/products" && request.method === "GET") return listProducts(request, env);
       if (url.pathname === "/api/products" && request.method === "POST") return createProduct(request, env);
       if (url.pathname.startsWith("/api/products/") && request.method === "PATCH") return updateProduct(request, env, decodeURIComponent(url.pathname.slice("/api/products/".length)));
+      if (url.pathname.startsWith("/api/products/") && request.method === "DELETE") return deleteProduct(request, env, decodeURIComponent(url.pathname.slice("/api/products/".length)));
       if (url.pathname === "/api/sales/reps" && request.method === "POST") return createSalesRep(request, env);
       if (url.pathname === "/api/sales/reps" && request.method === "GET") return listSalesReps(env);
       if (url.pathname === "/api/sales/bind" && (request.method === "POST" || request.method === "GET")) return bindCustomerToSalesRep(request, env);
@@ -756,10 +757,13 @@ async function listProducts(request, env) {
   const url = new URL(request.url);
   const limit = readLimit(url, 200);
   const { results } = await env.DB.prepare(`
-    SELECT id, sku, name, category, unit, price, cost, stock_qty AS stockQty,
-           safety_stock_qty AS safetyStockQty, status, updated_at AS updatedAt
+    SELECT id, sku, code, name, category, unit, price, cost,
+           original_price AS originalPrice, points_price AS pointsPrice,
+           stock_qty AS stockQty, safety_stock_qty AS safetyStockQty,
+           stock_unlimited AS stockUnlimited, subtitle, badge, image, description,
+           source, sort_order AS sortOrder, status, updated_at AS updatedAt
     FROM products
-    ORDER BY updated_at DESC, created_at DESC
+    ORDER BY sort_order ASC, updated_at DESC, created_at DESC
     LIMIT ?
   `).bind(limit).all();
   return json({ ok: true, data: results || [] });
@@ -775,22 +779,37 @@ async function createProduct(request, env) {
   const product = normalizeProductPayload(payload);
   await env.DB.prepare(`
     INSERT INTO products (
-      id, company_id, sku, name, category, unit, price, cost, stock_qty, safety_stock_qty, status, created_at, updated_at
-    ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-  `).bind(id, product.sku, name, product.category, product.unit, product.price, product.cost, product.stockQty, product.safetyStockQty, product.status).run();
-  return json({ ok: true, data: { id, sku: product.sku, name } });
+      id, company_id, sku, code, name, category, unit, price, cost,
+      original_price, points_price, stock_qty, safety_stock_qty, stock_unlimited,
+      subtitle, badge, image, description, source, sort_order, status, created_at, updated_at
+    ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `).bind(id, product.sku, product.code, name, product.category, product.unit, product.price, product.cost, product.originalPrice, product.pointsPrice, product.stockQty, product.safetyStockQty, product.stockUnlimited, product.subtitle, product.badge, product.image, product.description, product.source, product.sortOrder, product.status).run();
+  return json({ ok: true, data: { id, sku: product.sku, code: product.code, name } });
 }
 
 function normalizeProductPayload(payload) {
   const statusRaw = String(payload.status || "active").trim();
+  const price = Number.parseInt(payload.price || 0, 10) || 0;
+  const sku = String(payload.sku || payload.code || "").trim();
+  const code = String(payload.code || sku || "").trim();
   return {
-    sku: String(payload.sku || "").trim(),
+    sku,
+    code,
     category: String(payload.category || "").trim(),
-    unit: String(payload.unit || "件").trim() || "件",
-    price: Number.parseInt(payload.price || 0, 10) || 0,
+    unit: String(payload.unit || "?").trim() || "?",
+    price,
     cost: Number.parseInt(payload.cost || 0, 10) || 0,
+    originalPrice: Number.parseInt(payload.originalPrice ?? payload.original_price ?? price, 10) || 0,
+    pointsPrice: Number.parseInt(payload.pointsPrice ?? payload.points_price ?? price, 10) || 0,
     stockQty: Number.parseInt(payload.stockQty ?? payload.stock_qty ?? 0, 10) || 0,
     safetyStockQty: Number.parseInt(payload.safetyStockQty ?? payload.safety_stock_qty ?? 0, 10) || 0,
+    stockUnlimited: payload.stockUnlimited === true || payload.stockUnlimited === 1 || payload.stockUnlimited === "1" ? 1 : 0,
+    subtitle: String(payload.subtitle || "").trim(),
+    badge: String(payload.badge || "").trim(),
+    image: String(payload.image || "").trim(),
+    description: String(payload.description || "").trim(),
+    source: String(payload.source || "hooktea").trim() || "hooktea",
+    sortOrder: Number.parseInt(payload.sortOrder ?? payload.sort_order ?? 0, 10) || 0,
     status: statusRaw === "inactive" ? "inactive" : "active",
   };
 }
@@ -806,12 +825,24 @@ async function updateProduct(request, env, id) {
   const product = normalizeProductPayload(payload);
   const result = await env.DB.prepare(`
     UPDATE products
-    SET sku = ?, name = ?, category = ?, unit = ?, price = ?, cost = ?,
-        stock_qty = ?, safety_stock_qty = ?, status = ?, updated_at = datetime('now')
+    SET sku = ?, code = ?, name = ?, category = ?, unit = ?, price = ?, cost = ?,
+        original_price = ?, points_price = ?, stock_qty = ?, safety_stock_qty = ?,
+        stock_unlimited = ?, subtitle = ?, badge = ?, image = ?, description = ?,
+        source = ?, sort_order = ?, status = ?, updated_at = datetime('now')
     WHERE id = ?
-  `).bind(product.sku, name, product.category, product.unit, product.price, product.cost, product.stockQty, product.safetyStockQty, product.status, productId).run();
+  `).bind(product.sku, product.code, name, product.category, product.unit, product.price, product.cost, product.originalPrice, product.pointsPrice, product.stockQty, product.safetyStockQty, product.stockUnlimited, product.subtitle, product.badge, product.image, product.description, product.source, product.sortOrder, product.status, productId).run();
   if (!result.meta?.changes) return json({ ok: false, error: "product_not_found" }, 404);
-  return json({ ok: true, data: { id: productId, sku: product.sku, name } });
+  return json({ ok: true, data: { id: productId, sku: product.sku, code: product.code, name } });
+}
+
+async function deleteProduct(request, env, id) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const productId = String(id || "").trim();
+  if (!productId) return json({ ok: false, error: "missing_product_id" }, 400);
+  const result = await env.DB.prepare(`UPDATE products SET status = 'inactive', updated_at = datetime('now') WHERE id = ?`).bind(productId).run();
+  if (!result.meta?.changes) return json({ ok: false, error: "product_not_found" }, 404);
+  return json({ ok: true, data: { id: productId, status: "inactive" } });
 }
 
 async function loadBroadcastDataValue(env) {
@@ -2501,39 +2532,31 @@ function escapeHtml(value) {
 async function renderShopPage(env) {
   requireDb(env);
   const { results } = await env.DB.prepare(`
-    SELECT id, sku, name, category, unit, price, stock_qty AS stockQty, status
+    SELECT id, sku, code, name, category, unit, price,
+           original_price AS originalPrice, points_price AS pointsPrice,
+           stock_qty AS stockQty, stock_unlimited AS stockUnlimited,
+           subtitle, badge, image, description, status, sort_order AS sortOrder
     FROM products
     WHERE status = 'active'
-    ORDER BY category, updated_at DESC, created_at DESC
+    ORDER BY sort_order ASC, category ASC, updated_at DESC, created_at DESC
     LIMIT 200
   `).all();
   const products = results || [];
   const categories = [...new Set(products.map(p => p.category || "未分類"))];
   const groups = categories.map(category => {
-    const cards = products.filter(p => (p.category || "未分類") === category).map(p => `
-      <article class="product-card">
-        <div class="product-media">${escapeHtml(String(p.name || "商品").slice(0, 1))}</div>
-        <div class="product-body">
-          <div class="product-meta">${escapeHtml(p.sku || "")}</div>
-          <h3>${escapeHtml(p.name || "未命名商品")}</h3>
-          <div class="product-row"><strong>$${escapeHtml(new Intl.NumberFormat("zh-TW").format(Number(p.price || 0)))}</strong><span>庫存 ${escapeHtml(p.stockQty ?? 0)} ${escapeHtml(p.unit || "件")}</span></div>
-        </div>
-      </article>`).join("");
+    const cards = products.filter(p => (p.category || "未分類") === category).map(p => {
+      const price = new Intl.NumberFormat("zh-TW").format(Number(p.price || 0));
+      const original = Number(p.originalPrice || 0) > Number(p.price || 0) ? `<span class="original-price">$${escapeHtml(new Intl.NumberFormat("zh-TW").format(Number(p.originalPrice || 0)))}</span>` : "";
+      const points = Number(p.pointsPrice || 0) ? `<span class="points">可扣 ${escapeHtml(p.pointsPrice)} 點</span>` : "";
+      const stock = p.stockUnlimited ? "不限量" : `庫存 ${escapeHtml(p.stockQty ?? 0)} ${escapeHtml(p.unit || "件")}`;
+      const media = p.image ? `<img class="product-image" src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name || "商品")}">` : `<div class="product-media-fallback">${escapeHtml(String(p.name || "商品").slice(0, 1))}</div>`;
+      return `<article class="product-card"><div class="product-media">${media}${p.badge ? `<span class="badge">${escapeHtml(p.badge)}</span>` : ""}</div><div class="product-body"><div class="product-meta">${escapeHtml(p.code || p.sku || "")}</div><h3>${escapeHtml(p.name || "未命名商品")}</h3>${p.subtitle ? `<p class="subtitle">${escapeHtml(p.subtitle)}</p>` : ""}${p.description ? `<p class="description">${escapeHtml(p.description)}</p>` : ""}<div class="product-row"><div><strong>$${escapeHtml(price)}</strong>${original}</div><span>${escapeHtml(stock)}</span></div>${points}</div></article>`;
+    }).join("");
     return `<section class="category"><h2>${escapeHtml(category)}</h2><div class="grid">${cards}</div></section>`;
   }).join("");
-  return new Response(`<!doctype html>
-<html lang="zh-Hant">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Gusys 商城</title>
-  <style>
-    *{box-sizing:border-box}body{margin:0;background:#050505;color:#fff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.app{max-width:1080px;margin:0 auto;padding:28px 18px 56px}.top{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:28px}.brand{font-size:28px;font-weight:900}.muted{color:#9ca3af}.category{margin-top:28px}.category h2{font-size:20px;margin:0 0 14px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.product-card{background:#111;border:1px solid #262626;border-radius:12px;overflow:hidden}.product-media{height:150px;background:linear-gradient(135deg,#064e3b,#111827);display:flex;align-items:center;justify-content:center;font-size:56px;font-weight:900;color:#facc15}.product-body{padding:14px}.product-meta{color:#8d8d8d;font-size:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.product-card h3{font-size:17px;line-height:1.35;min-height:46px;margin:8px 0 14px}.product-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.product-row strong{color:#fde68a;font-size:22px}.product-row span{color:#a7f3d0;font-size:13px;font-weight:800}.empty{border:1px dashed #333;border-radius:12px;padding:40px;text-align:center;color:#9ca3af}@media(max-width:760px){.top{align-items:flex-start;flex-direction:column}.grid{grid-template-columns:1fr 1fr}.product-media{height:120px}}@media(max-width:480px){.grid{grid-template-columns:1fr}}
-  </style>
-</head>
-<body><main class="app"><header class="top"><div><div class="brand">Gusys 商城</div><div class="muted">HookTea 商品展示</div></div><div class="muted">${products.length} 件商品</div></header>${groups || '<div class="empty">目前沒有上架商品</div>'}</main></body>
-</html>`, { headers: HTML_HEADERS });
+  return new Response(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gusys &#21830;&#22478;</title><style>*{box-sizing:border-box}body{margin:0;background:#050505;color:#fff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.app{max-width:1120px;margin:0 auto;padding:28px 18px 56px}.top{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:28px}.brand{font-size:28px;font-weight:900}.muted{color:#9ca3af}.category{margin-top:28px}.category h2{font-size:20px;margin:0 0 14px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.product-card{background:#111;border:1px solid #262626;border-radius:12px;overflow:hidden}.product-media{height:170px;background:#18181b;position:relative;display:flex;align-items:center;justify-content:center}.product-image{width:100%;height:100%;object-fit:cover;display:block}.product-media-fallback{font-size:56px;font-weight:900;color:#facc15}.badge{position:absolute;left:12px;top:12px;background:#06c755;color:#fff;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:900}.product-body{padding:14px}.product-meta{color:#8d8d8d;font-size:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.product-card h3{font-size:17px;line-height:1.35;margin:8px 0 8px}.subtitle{margin:0 0 8px;color:#d1d5db;font-size:13px;font-weight:800}.description{margin:0 0 14px;color:#9ca3af;font-size:13px;line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.product-row{display:flex;align-items:flex-end;justify-content:space-between;gap:10px}.product-row strong{color:#fde68a;font-size:22px}.original-price{display:block;color:#737373;font-size:12px;text-decoration:line-through;margin-top:2px}.product-row span,.points{color:#a7f3d0;font-size:13px;font-weight:800}.points{display:inline-block;margin-top:10px;background:#052e24;border:1px solid #14532d;border-radius:999px;padding:4px 8px}.empty{border:1px dashed #333;border-radius:12px;padding:40px;text-align:center;color:#9ca3af}@media(max-width:760px){.top{align-items:flex-start;flex-direction:column}.grid{grid-template-columns:1fr 1fr}.product-media{height:140px}}@media(max-width:480px){.grid{grid-template-columns:1fr}}</style></head><body><main class="app"><header class="top"><div><div class="brand">Gusys &#21830;&#22478;</div><div class="muted">HookTea &#21830;&#21697;&#23637;&#31034;</div></div><div class="muted">${products.length} &#20214;&#21830;&#21697;</div></header>${groups || '<div class="empty">&#30446;&#21069;&#27794;&#26377;&#19978;&#26550;&#21830;&#21697;</div>'}</main></body></html>`, { headers: HTML_HEADERS });
 }
+
 function renderActionModulesPage(request) {
   const viewParam = new URL(request.url).searchParams.get('view');
   const initialView = viewParam === 'flex_rules' ? 'flex_rules' : (viewParam === 'paid_broadcast' ? 'paid_broadcast' : '');
@@ -2575,7 +2598,7 @@ function renderHookteaAdminPage(env) {
     <section class="view active" id="view-dashboard"><div class="stats-grid" id="metrics"></div><section class="panel"><div class="panel-header"><div class="section-title">營運摘要</div><span class="muted" id="lastRefresh"></span></div><div class="panel-body"><div class="ops-list" id="opsSummary"></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">最近 LINE 訊息</div><button class="btn-outline btn-small" data-jump="messages">查看全部</button></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>用戶</th><th>內容</th><th>Thread</th></tr></thead><tbody id="dashboardMessages"></tbody></table></div></section></section>
     <section class="view" id="view-sales"><section class="panel"><div class="panel-header"><div class="section-title">新增業務與專屬 QR</div><span class="muted" id="salesStatus"></span></div><div class="panel-body"><div class="form-grid"><input id="salesName" placeholder="業務姓名"><input id="salesPhone" placeholder="電話"><input id="salesLine" placeholder="LINE User ID"><input id="salesCode" placeholder="業務代碼，可空白"></div><button class="btn-green-main" id="createSales">建立業務 QR</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">業務清單</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>業務</th><th>代碼</th><th>QR</th><th>邀請連結</th><th>狀態</th></tr></thead><tbody id="salesRows"></tbody></table></div></section></section>
     <section class="view" id="view-customers"><section class="panel"><div class="panel-header"><div class="section-title">客戶 CRM</div></div><div class="crm-toolbar"><input id="customerSearch" class="crm-search" placeholder="搜尋姓名、電話、ID..."><button class="btn-outline">隱藏名單</button><button class="btn-outline" id="syncProfiles">重新同步 LINE 資料</button><button class="btn-green-main">會員 Excel 下載</button><span class="muted" id="syncProfileStatus"></span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>姓名</th><th>LINE UID</th><th>目前等級</th><th>註冊日期</th><th>操作</th></tr></thead><tbody id="customerRows"></tbody></table></div></section></section>
-    <section class="view" id="view-inventory"><section class="panel"><div class="panel-header"><div class="section-title" id="productFormTitle">新增商品</div><span class="muted" id="productStatus"></span></div><div class="panel-body"><input id="productId" type="hidden"><div class="form-grid"><input id="productSku" placeholder="SKU"><input id="productCategory" placeholder="分類"><input id="productName" placeholder="商品名稱"><input id="productPrice" type="number" placeholder="售價"><input id="productCost" type="number" placeholder="成本"><input id="productStock" type="number" placeholder="庫存"><input id="productSafety" type="number" placeholder="安全庫存"><select id="productStatusValue"><option value="active">上架</option><option value="inactive">下架</option></select></div><button class="btn-green-main" id="createProduct">建立商品</button> <button class="btn-outline" id="cancelProductEdit" style="display:none">取消編輯</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">商品庫存</div><a class="btn-outline btn-small" href="/shop" target="_blank">前台商城</a></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>商品</th><th>SKU</th><th>分類</th><th>售價</th><th>庫存</th><th>狀態</th><th>操作</th></tr></thead><tbody id="productRows"></tbody></table></div></section></section>
+    <section class="view" id="view-inventory"><section class="panel"><div class="panel-header"><div class="section-title" id="productFormTitle">&#26032;&#22686;&#21830;&#21697;</div><span class="muted" id="productStatus"></span></div><div class="panel-body"><input id="productId" type="hidden"><div class="form-grid"><input id="productName" placeholder="&#21830;&#21697;&#21517;&#31281;"><input id="productSku" placeholder="&#21830;&#21697;&#20195;&#30908; / SKU"><input id="productCategory" placeholder="&#20998;&#39006;"><input id="productBadge" placeholder="&#24509;&#31456;&#65292;&#20363;&#22914;&#65306;&#26032;&#26371;&#21729;&#38480;&#23450;"><input id="productSubtitle" placeholder="&#21103;&#27161; / &#24215;&#21517;"><input id="productPrice" type="number" placeholder="&#21830;&#21697;&#21806;&#20729;"><input id="productOriginalPrice" type="number" placeholder="&#21407;&#20729;"><input id="productPointsPrice" type="number" placeholder="&#21487;&#25187;&#40670;"><input id="productCost" type="number" placeholder="&#25104;&#26412;"><input id="productStock" type="number" placeholder="&#24235;&#23384;&#65292;&#30041; 0 &#21487;&#25645;&#37197;&#19981;&#38480;&#37327;"><input id="productSafety" type="number" placeholder="&#23433;&#20840;&#24235;&#23384;"><input id="productSortOrder" type="number" placeholder="&#25490;&#24207;"><input id="productImage" class="full-span" placeholder="&#21830;&#21697;&#22294;&#29255; URL"><textarea id="productDescription" class="full-span" placeholder="&#21830;&#21697;&#25551;&#36848;"></textarea><label class="checkbox-line"><input id="productStockUnlimited" type="checkbox"> &#24235;&#23384;&#19981;&#38480;&#37327;</label><select id="productStatusValue"><option value="active">&#19978;&#26550;</option><option value="inactive">&#19979;&#26550;</option></select></div><button class="btn-green-main" id="createProduct">&#24314;&#31435;&#21830;&#21697;</button> <button class="btn-outline" id="cancelProductEdit" style="display:none">&#21462;&#28040;&#32232;&#36655;</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">&#21830;&#21697;&#24235;&#23384;</div><a class="btn-outline btn-small" href="/shop" target="_blank">&#21069;&#21488;&#21830;&#22478;</a></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>&#21830;&#21697;</th><th>&#20998;&#39006;</th><th>&#20195;&#30908;</th><th>&#21830;&#21697;&#21806;&#20729;</th><th>&#21487;&#25187;&#40670;</th><th>&#24235;&#23384;</th><th>&#29376;&#24907;</th><th>&#25805;&#20316;</th></tr></thead><tbody id="productRows"></tbody></table></div></section></section>
     <section class="view" id="view-reports"><section class="panel"><div class="panel-header"><div class="section-title">每月業績報表</div><div><input id="reportPeriod" type="month"><button class="btn-outline btn-small" id="loadReport">查詢</button></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>業務</th><th>代碼</th><th>訂單數</th><th>營收</th><th>毛利</th></tr></thead><tbody id="reportRows"></tbody></table></div></section></section>
     <section class="view" id="view-orders"><section class="panel"><div class="panel-header"><div class="section-title">訂單維護</div><span class="status-badge warn">待串接</span></div><div class="panel-body"><div class="ops-list"><div class="ops-item"><div class="ops-label">HookTea 對應功能</div><div class="ops-value">訂單查詢、付款狀態、出貨狀態、取消保護</div></div><div class="ops-item"><div class="ops-label">Gusys 下一步</div><div class="ops-value">建立 orders / order_items，並綁定 sales_rep_id 供業績歸屬</div></div><div class="ops-item"><div class="ops-label">目前來源</div><div class="ops-value">尚未有 Gusys 訂單 API</div></div></div></div></section></section>
     <section class="view" id="view-points"><section class="panel"><div class="panel-header"><div class="section-title">點數總表</div><div><span class="status-badge warn">母站 API</span> <button class="btn-outline btn-small" id="refreshPoints">重新讀取</button></div></div><div class="crm-toolbar"><input id="pointsSearch" class="crm-search" placeholder="搜尋會員姓名、LINE UID..."><span class="muted" id="pointsStatus">請選擇會員</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>會員</th><th>LINE UID</th><th>業務歸屬</th><th>目前點數</th><th>操作</th></tr></thead><tbody id="pointsMemberRows"></tbody></table></div></section><section class="panel"><div class="panel-header"><div class="section-title">點數流水</div><span class="muted" id="pointsLedgerTitle">尚未選擇會員</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>會員</th><th>類型</th><th>異動原因</th><th>點數</th><th>餘額</th><th>LINE UID</th></tr></thead><tbody id="pointsLedgerRows"></tbody></table></div></section></section>
@@ -2687,12 +2710,12 @@ function renderHookteaAdminPage(env) {
     async function saveRichMenu(){ try{ const payload={id:activeRichMenu?.id||"",name:qs("#richMenuName").value,aliasId:qs("#richMenuAlias").value,chatBarText:qs("#richMenuChatBar").value,imageDataUrl:qs("#richMenuImage").value,config:readRichConfig()}; const saved=await api("/api/admin/rich-menus",{method:"POST",body:JSON.stringify(payload)}); qs("#richMenuStatus").textContent="已儲存"; activeRichMenu=saved; await loadRichMenus(); setRichForm(saved); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }
     async function deployRichMenu(){ if(!confirm("部署後會成為 LINE 官方帳號預設圖文選單，確定送出？")) return; try{ await saveRichMenu(); const result=await api("/api/admin/rich-menus/deploy",{method:"POST",body:JSON.stringify({id:activeRichMenu?.id})}); qs("#richMenuStatus").textContent="已部署："+(result.richMenuId||""); await loadRichMenus(); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }
     async function deleteRichMenu(){ if(!activeRichMenu?.id){ qs("#richMenuStatus").textContent="尚未選擇檔案"; return; } if(!confirm("刪除此圖文選單檔案？")) return; try{ await api("/api/admin/rich-menus?id="+encodeURIComponent(activeRichMenu.id),{method:"DELETE"}); activeRichMenu=null; qs("#richMenuStatus").textContent="已刪除"; await loadRichMenus(); }catch(err){ qs("#richMenuStatus").textContent=err.message; } }
-    function productPayload(){ return {sku:qs("#productSku").value,category:qs("#productCategory").value,name:qs("#productName").value,price:qs("#productPrice").value,cost:qs("#productCost").value,stockQty:qs("#productStock").value,safetyStockQty:qs("#productSafety").value,status:qs("#productStatusValue").value}; }
-    function resetProductForm(){ qs("#productId").value=""; ["#productSku","#productCategory","#productName","#productPrice","#productCost","#productStock","#productSafety"].forEach(sel => qs(sel).value=""); qs("#productStatusValue").value="active"; qs("#productFormTitle").textContent="新增商品"; qs("#createProduct").textContent="建立商品"; qs("#cancelProductEdit").style.display="none"; qs("#productStatus").textContent=""; }
-    function editProduct(id){ const p = adminProducts.find(item => item.id === id); if(!p) return; qs("#productId").value=p.id; qs("#productSku").value=p.sku||""; qs("#productCategory").value=p.category||""; qs("#productName").value=p.name||""; qs("#productPrice").value=p.price||0; qs("#productCost").value=p.cost||0; qs("#productStock").value=p.stockQty||0; qs("#productSafety").value=p.safetyStockQty||0; qs("#productStatusValue").value=p.status||"active"; qs("#productFormTitle").textContent="編輯商品"; qs("#createProduct").textContent="儲存商品"; qs("#cancelProductEdit").style.display="inline-block"; qs("#productStatus").textContent="正在編輯：" + (p.name || p.sku || p.id); }
+    function productPayload(){ return {sku:qs("#productSku").value,code:qs("#productSku").value,category:qs("#productCategory").value,name:qs("#productName").value,badge:qs("#productBadge").value,subtitle:qs("#productSubtitle").value,price:qs("#productPrice").value,originalPrice:qs("#productOriginalPrice").value,pointsPrice:qs("#productPointsPrice").value,cost:qs("#productCost").value,stockQty:qs("#productStock").value,safetyStockQty:qs("#productSafety").value,sortOrder:qs("#productSortOrder").value,image:qs("#productImage").value,description:qs("#productDescription").value,stockUnlimited:qs("#productStockUnlimited").checked?1:0,status:qs("#productStatusValue").value}; }
+    function resetProductForm(){ qs("#productId").value=""; ["#productName","#productSku","#productCategory","#productBadge","#productSubtitle","#productPrice","#productOriginalPrice","#productPointsPrice","#productCost","#productStock","#productSafety","#productSortOrder","#productImage","#productDescription"].forEach(sel => qs(sel).value=""); qs("#productStockUnlimited").checked=false; qs("#productStatusValue").value="active"; qs("#productFormTitle").textContent="新增商品"; qs("#createProduct").textContent="建立商品"; qs("#cancelProductEdit").style.display="none"; qs("#productStatus").textContent=""; }
+    function editProduct(id){ const p = adminProducts.find(item => item.id === id); if(!p) return; qs("#productId").value=p.id; qs("#productName").value=p.name||""; qs("#productSku").value=p.code||p.sku||""; qs("#productCategory").value=p.category||""; qs("#productBadge").value=p.badge||""; qs("#productSubtitle").value=p.subtitle||""; qs("#productPrice").value=p.price||0; qs("#productOriginalPrice").value=p.originalPrice||0; qs("#productPointsPrice").value=p.pointsPrice||0; qs("#productCost").value=p.cost||0; qs("#productStock").value=p.stockQty||0; qs("#productSafety").value=p.safetyStockQty||0; qs("#productSortOrder").value=p.sortOrder||0; qs("#productImage").value=p.image||""; qs("#productDescription").value=p.description||""; qs("#productStockUnlimited").checked=!!Number(p.stockUnlimited||0); qs("#productStatusValue").value=p.status||"active"; qs("#productFormTitle").textContent="編輯商品"; qs("#createProduct").textContent="儲存商品"; qs("#cancelProductEdit").style.display="inline-block"; qs("#productStatus").textContent="正在編輯：" + (p.name || p.sku || p.id); }
     async function saveProductForm(){ const id = qs("#productId").value.trim(); const payload = productPayload(); try{ await api(id ? ("/api/products/" + encodeURIComponent(id)) : "/api/products",{method:id?"PATCH":"POST",body:JSON.stringify(payload)}); qs("#productStatus").textContent = id ? "已更新" : "已建立"; resetProductForm(); await Promise.all([loadProducts(),loadSummary()]); }catch(err){ qs("#productStatus").textContent = err.message; } }
-    async function loadProducts(){ adminProducts = await api("/api/products"); qs("#productRows").innerHTML = adminProducts.map(r => '<tr><td><strong>'+esc(r.name)+'</strong></td><td class="mono">'+esc(r.sku)+'</td><td>'+esc(r.category||"")+'</td><td>'+money(r.price)+'</td><td>'+money(r.stockQty)+' / '+money(r.safetyStockQty)+'</td><td>'+badge(r.status||"active", Number(r.stockQty) <= Number(r.safetyStockQty) ? "warn" : "")+'</td><td><button class="btn-outline btn-small" data-edit-product="'+esc(r.id)+'">編輯</button></td></tr>').join("") || tableEmpty(7,"尚無商品"); qsa("[data-edit-product]").forEach(btn => btn.onclick = () => editProduct(btn.dataset.editProduct)); }
-    async function loadMessages(){ const rows = await api("/api/admin/line-messages"); const html = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); qs("#messageRows").innerHTML = html; qs("#dashboardMessages").innerHTML = rows.slice(0,6).map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); }
+    async function loadProducts(){ adminProducts = await api("/api/products"); qs("#productRows").innerHTML = adminProducts.map(r => { const thumb=r.image?'<img src="'+esc(r.image)+'" style="width:54px;height:54px;object-fit:cover;border-radius:10px;border:1px solid #e2e8f0">':'<div style="width:54px;height:54px;border-radius:10px;background:#f1f5f9;display:flex;align-items:center;justify-content:center;font-weight:900">'+esc(String(r.name||"商").slice(0,1))+'</div>'; const stock=r.stockUnlimited?'不限量':(money(r.stockQty)+' / '+money(r.safetyStockQty)); const price='<strong>'+money(r.price)+'</strong>'+(Number(r.originalPrice)>Number(r.price)?'<div class="muted">原價 '+money(r.originalPrice)+'</div>':''); return '<tr><td><div class="member-cell">'+thumb+'<div><strong>'+esc(r.name)+'</strong><div class="muted">'+esc(r.subtitle||r.description||"")+'</div>'+(r.badge?badge(r.badge):'')+'</div></div></td><td>'+esc(r.category||"")+'</td><td class="mono">'+esc(r.code||r.sku||"")+'</td><td>'+price+'</td><td><strong>'+money(r.pointsPrice||0)+'</strong></td><td>'+stock+'</td><td>'+badge(r.status||"active", Number(r.stockQty) <= Number(r.safetyStockQty) && !r.stockUnlimited ? "warn" : "")+'</td><td><button class="btn-outline btn-small" data-edit-product="'+esc(r.id)+'">編輯</button></td></tr>'; }).join("") || tableEmpty(8,"尚無商品"); qsa("[data-edit-product]").forEach(btn => btn.onclick = () => editProduct(btn.dataset.editProduct)); }
+    async function loadMessages(){    async function loadMessages(){ const rows = await api("/api/admin/line-messages"); const html = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); qs("#messageRows").innerHTML = html; qs("#dashboardMessages").innerHTML = rows.slice(0,6).map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); }
     async function loadWebhooks(){ const rows = await api("/api/admin/webhooks"); qs("#webhookRows").innerHTML = rows.map(r => { const s = r.summary || {}; const tone = s.invalidSignature ? "danger" : (s.hasReplyPayload ? "" : "warn"); const label = s.invalidSignature ? "簽章錯誤" : (s.hasReplyPayload ? "有回覆" : "已轉送"); const detail = s.contentType || "無 content-type"; return '<tr><td>'+esc(r.createdAt)+'</td><td>'+esc(r.source)+'</td><td class="summary-text">'+esc(r.messageText||"")+'</td><td>'+esc(r.motherStatus||"")+'</td><td>'+badge(label,tone)+'<div class="muted">'+esc(detail)+'</div></td></tr>'; }).join("") || tableEmpty(5,"尚無紀錄"); }
     async function loadAi(){ const rows = await api("/api/ai-monitor/insights?limit=100"); qs("#aiRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td>'+badge(r.riskLevel||"-", r.riskLevel === "high" ? "danger" : (r.riskLevel === "medium" ? "warn" : ""))+'</td><td>'+esc(r.category||"")+'</td><td class="summary-text">'+esc(r.summary||"")+'</td><td class="summary-text">'+esc(r.recommendedAction||"")+'</td></tr>').join("") || tableEmpty(5,"尚無 AI 洞察"); }
     function memberTags(m){ return Array.isArray(m.broadcastTags) ? m.broadcastTags : []; }
