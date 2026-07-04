@@ -49,6 +49,8 @@ export default {
       if ((url.pathname === "/api/admin/webhook-events" || url.pathname === "/api/admin/webhooks") && request.method === "GET") return listAdminWebhookEvents(request, env);
       if (url.pathname === "/api/admin/orders" && request.method === "GET") return listAdminOrders(request, env);
       if (url.pathname.startsWith("/api/admin/orders/") && request.method === "PATCH") return updateAdminOrder(request, env, decodeURIComponent(url.pathname.slice("/api/admin/orders/".length)));
+      if (url.pathname === "/api/shop/products" && request.method === "GET") return listShopProducts(request, env);
+      if (url.pathname === "/api/shop/orders" && request.method === "POST") return createShopOrder(request, env);
       if (url.pathname === "/api/products" && request.method === "GET") return listProducts(request, env);
       if (url.pathname === "/api/products" && request.method === "POST") return createProduct(request, env);
       if (url.pathname.startsWith("/api/products/") && request.method === "PATCH") return updateProduct(request, env, decodeURIComponent(url.pathname.slice("/api/products/".length)));
@@ -91,6 +93,14 @@ function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), { status, headers: JSON_HEADERS });
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 function parseJson(text, fallback = null) {
   try {
     return JSON.parse(text);
@@ -771,6 +781,241 @@ async function listAdminWebhookEvents(request, env) {
   return json({ ok: true, data: (results || []).map(item => ({ ...item, summary: summarizeWebhookRaw(item.rawJson) })) });
 }
 
+async function getPublicHookteaSettings(env) {
+  const defaults = defaultHookteaSettings(env);
+  if (!env.DB) return defaults;
+  const row = await env.DB.prepare(`
+    SELECT value_json AS valueJson
+    FROM system_settings
+    WHERE key = 'hooktea_settings'
+    LIMIT 1
+  `).first().catch(() => null);
+  return mergePlainSettings(defaults, parseJson(row?.valueJson || "{}", {}));
+}
+
+function normalizeShopProduct(row) {
+  return {
+    id: row.id,
+    sku: row.sku || row.code || "",
+    code: row.code || row.sku || "",
+    name: row.name || "",
+    category: row.category || "",
+    storeName: row.storeName || "HookTea",
+    subtitle: row.subtitle || "",
+    badge: row.badge || "",
+    image: row.image || "",
+    description: row.description || "",
+    price: Number(row.price || 0),
+    originalPrice: Number(row.originalPrice || row.price || 0),
+    pointsPrice: Number(row.pointsPrice || 0),
+    stockQty: Number(row.stockQty || 0),
+    stockUnlimited: Number(row.stockUnlimited || 0) === 1,
+    status: row.status || "active",
+  };
+}
+
+async function listShopProductRows(env, limit = 120) {
+  requireDb(env);
+  const { results } = await env.DB.prepare(`
+    SELECT id, sku, code, name, category, price,
+           original_price AS originalPrice, points_price AS pointsPrice,
+           stock_qty AS stockQty, stock_unlimited AS stockUnlimited,
+           store_name AS storeName, subtitle, badge, image, description, status
+    FROM products
+    WHERE status = 'active'
+    ORDER BY sort_order ASC, updated_at DESC, created_at DESC
+    LIMIT ?
+  `).bind(limit).all();
+  return (results || []).map(normalizeShopProduct);
+}
+
+async function listShopProducts(_request, env) {
+  const [settings, products] = await Promise.all([getPublicHookteaSettings(env), listShopProductRows(env)]);
+  return json({ ok: true, data: { settings, products } });
+}
+
+function cleanShopString(value, max = 500) {
+  return String(value || "").trim().slice(0, max);
+}
+
+function normalizeShopPaymentMethod(value, settings) {
+  const allowed = new Set(splitCsv(settings.shop_payment_methods || "LINEPAY,REMITTANCE,COD").map(v => v.toUpperCase()));
+  const raw = String(value || "REMITTANCE").trim().toUpperCase();
+  if (["LINEPAY", "REMITTANCE", "COD", "NEWEBPAY", "POINTS"].includes(raw) && (!allowed.size || allowed.has(raw))) return raw;
+  return allowed.has("REMITTANCE") || !allowed.size ? "REMITTANCE" : [...allowed][0];
+}
+
+function normalizeShippingCarrier(value) {
+  const raw = String(value || "FAMILY").trim().toUpperCase();
+  return ["FAMILY", "SEVEN", "POST", "HOME"].includes(raw) ? raw : "FAMILY";
+}
+
+async function findCustomerForShopOrder(env, payload, orderId) {
+  const lineUserId = cleanShopString(payload.lineUserId || payload.line_user_id || payload.userId, 120) || `guest:${orderId}`;
+  const displayName = cleanShopString(payload.displayName || payload.name || payload.shippingName || "商城客戶", 120);
+  const phone = cleanShopString(payload.phone || payload.shippingPhone, 60);
+  const address = cleanShopString(payload.address || payload.shippingAddress, 500);
+  let row = await env.DB.prepare(`SELECT id FROM customers WHERE line_user_id = ? LIMIT 1`).bind(lineUserId).first();
+  if (!row) {
+    const customerId = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO customers (id, company_id, line_user_id, display_name, phone, address, status, first_seen_at, created_at, updated_at)
+      VALUES (?, 'default', ?, ?, ?, ?, 'active', datetime('now'), datetime('now'), datetime('now'))
+    `).bind(customerId, lineUserId, displayName, phone, address).run();
+    row = { id: customerId };
+  } else {
+    await env.DB.prepare(`
+      UPDATE customers
+      SET display_name = CASE WHEN ? <> '' THEN ? ELSE display_name END,
+          phone = CASE WHEN ? <> '' THEN ? ELSE phone END,
+          address = CASE WHEN ? <> '' THEN ? ELSE address END,
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(displayName, displayName, phone, phone, address, address, row.id).run();
+  }
+  const binding = await env.DB.prepare(`
+    SELECT sales_rep_id AS salesRepId
+    FROM customer_sales_bindings
+    WHERE customer_id = ? AND active = 1
+    LIMIT 1
+  `).bind(row.id).first();
+  return { id: row.id, lineUserId, displayName, phone, address, salesRepId: binding?.salesRepId || "" };
+}
+
+function shouldDeductOrderInventory(order) {
+  const status = String(order?.status || "").toLowerCase();
+  const paymentStatus = String(order?.paymentStatus || order?.payment_status || "").toLowerCase();
+  const paymentMethod = String(order?.paymentMethod || order?.payment_method || "").toUpperCase();
+  return paymentStatus === "paid" || ["paid", "shipped", "completed"].includes(status) || (paymentMethod === "COD" && ["shipped", "completed"].includes(status));
+}
+
+async function syncOrderInventory(env, orderId, orderState = null) {
+  const order = orderState || await env.DB.prepare(`
+    SELECT id, status, payment_status AS paymentStatus, payment_method AS paymentMethod
+    FROM orders
+    WHERE id = ?
+    LIMIT 1
+  `).bind(orderId).first();
+  if (!order) return { skipped: true, reason: "order_not_found" };
+  const saleCount = await env.DB.prepare(`
+    SELECT COUNT(*) AS count
+    FROM inventory_movements
+    WHERE reference_type = 'order' AND reference_id = ? AND movement_type = 'sale'
+  `).bind(orderId).first();
+  const returnCount = await env.DB.prepare(`
+    SELECT COUNT(*) AS count
+    FROM inventory_movements
+    WHERE reference_type = 'order' AND reference_id = ? AND movement_type = 'return'
+  `).bind(orderId).first();
+  const hasSale = Number(saleCount?.count || 0) > 0;
+  const hasReturn = Number(returnCount?.count || 0) > 0;
+  const cancelled = String(order.status || "").toLowerCase() === "cancelled";
+  const { results } = await env.DB.prepare(`
+    SELECT oi.product_id AS productId, oi.product_name AS productName, oi.quantity, oi.unit_price AS unitPrice,
+           p.cost, p.stock_unlimited AS stockUnlimited
+    FROM order_items oi
+    JOIN products p ON p.id = oi.product_id
+    WHERE oi.order_id = ?
+  `).bind(orderId).all();
+  const items = results || [];
+  if (!items.length) return { skipped: true, reason: "no_items" };
+  if (cancelled && hasSale && !hasReturn) {
+    for (const item of items) {
+      const qty = Math.max(Number(item.quantity || 0), 0);
+      if (!qty) continue;
+      await env.DB.prepare(`
+        INSERT INTO inventory_movements (id, company_id, product_id, movement_type, quantity, unit_cost, reference_type, reference_id, note, created_by, created_at)
+        VALUES (?, 'default', ?, 'return', ?, ?, 'order', ?, ?, 'system', datetime('now'))
+      `).bind(crypto.randomUUID(), item.productId, qty, Number(item.cost || 0), orderId, `訂單取消退回：${item.productName || "商城商品"}`).run();
+      if (Number(item.stockUnlimited || 0) !== 1) {
+        await env.DB.prepare(`UPDATE products SET stock_qty = stock_qty + ?, updated_at = datetime('now') WHERE id = ?`).bind(qty, item.productId).run();
+      }
+    }
+    return { returned: true, count: items.length };
+  }
+  if (!shouldDeductOrderInventory(order) || hasSale || cancelled) return { skipped: true, reason: hasSale ? "already_deducted" : "not_ready" };
+  for (const item of items) {
+    const qty = Math.max(Number(item.quantity || 0), 0);
+    if (!qty) continue;
+    await env.DB.prepare(`
+      INSERT INTO inventory_movements (id, company_id, product_id, movement_type, quantity, unit_cost, reference_type, reference_id, note, created_by, created_at)
+      VALUES (?, 'default', ?, 'sale', ?, ?, 'order', ?, ?, 'system', datetime('now'))
+    `).bind(crypto.randomUUID(), item.productId, qty, Number(item.cost || 0), orderId, `訂單出貨/核帳扣庫存：${item.productName || "商城商品"}`).run();
+    if (Number(item.stockUnlimited || 0) !== 1) {
+      await env.DB.prepare(`UPDATE products SET stock_qty = MAX(stock_qty - ?, 0), updated_at = datetime('now') WHERE id = ?`).bind(qty, item.productId).run();
+    }
+  }
+  return { deducted: true, count: items.length };
+}
+
+async function createShopOrder(request, env) {
+  requireDb(env);
+  const settings = await getPublicHookteaSettings(env);
+  const payload = await request.json().catch(() => ({}));
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  if (!rawItems.length) return json({ ok: false, error: "missing_items" }, 400);
+  const orderId = crypto.randomUUID();
+  const customer = await findCustomerForShopOrder(env, payload, orderId);
+  const paymentMethod = normalizeShopPaymentMethod(payload.paymentMethod, settings);
+  const shippingCarrier = normalizeShippingCarrier(payload.shippingCarrier);
+  const shippingName = cleanShopString(payload.shippingName || payload.name || customer.displayName, 120);
+  const shippingPhone = cleanShopString(payload.shippingPhone || payload.phone || customer.phone, 60);
+  const shippingAddress = cleanShopString(payload.shippingAddress || payload.address || customer.address, 500);
+  const shippingStoreInfo = cleanShopString(payload.shippingStoreInfo || payload.storeInfo || payload.cvsStore, 500);
+  if (!shippingName || !shippingPhone) return json({ ok: false, error: "missing_receiver" }, 400);
+  if (["FAMILY", "SEVEN"].includes(shippingCarrier) && !shippingStoreInfo) return json({ ok: false, error: "missing_store_info" }, 400);
+  if (!["FAMILY", "SEVEN"].includes(shippingCarrier) && !shippingAddress) return json({ ok: false, error: "missing_shipping_address" }, 400);
+
+  const ids = [...new Set(rawItems.map(item => cleanShopString(item.productId || item.id, 80)).filter(Boolean))];
+  if (!ids.length) return json({ ok: false, error: "missing_product_id" }, 400);
+  const placeholders = ids.map(() => "?").join(",");
+  const productRows = await env.DB.prepare(`
+    SELECT id, sku, code, name, price, cost, stock_qty AS stockQty, stock_unlimited AS stockUnlimited, status
+    FROM products
+    WHERE id IN (${placeholders}) AND status = 'active'
+  `).bind(...ids).all();
+  const products = new Map((productRows.results || []).map(row => [row.id, row]));
+  const items = [];
+  for (const rawItem of rawItems) {
+    const productId = cleanShopString(rawItem.productId || rawItem.id, 80);
+    const product = products.get(productId);
+    const quantity = Math.max(Number.parseInt(rawItem.quantity || rawItem.qty || 1, 10) || 1, 1);
+    if (!product) return json({ ok: false, error: "product_not_found", productId }, 404);
+    if (Number(product.stockUnlimited || 0) !== 1 && Number(product.stockQty || 0) < quantity) return json({ ok: false, error: "stock_not_enough", productId, stockQty: Number(product.stockQty || 0) }, 409);
+    const unitPrice = Number(product.price || 0);
+    items.push({ product, quantity, unitPrice, total: unitPrice * quantity });
+  }
+  const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+  const discount = Math.max(Number.parseInt(payload.discount || 0, 10) || 0, 0);
+  const total = Math.max(subtotal - discount, 0);
+  const remittance = cleanShopString(payload.remittance || payload.remittanceLast5, 40);
+  const orderNo = `GS${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  const noteParts = [cleanShopString(payload.note, 500), cleanShopString(payload.entryUrl || request.headers.get("referer") || "", 500), cleanShopString(payload.entryParams, 500)].filter(Boolean);
+  await env.DB.prepare(`
+    INSERT INTO orders (
+      id, company_id, customer_id, sales_rep_id, order_no, status, payment_status,
+      subtotal, discount, total, note, ordered_at, created_at, updated_at,
+      type, payment_method, remittance, remittance_reported_at, remittance_verified_at,
+      shipping_name, shipping_phone, shipping_address, shipping_carrier, shipping_store_info,
+      tracking_number, tracking_url
+    ) VALUES (?, 'default', ?, ?, ?, 'pending', 'unpaid', ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'),
+      'PRODUCT', ?, ?, ?, '', ?, ?, ?, ?, ?, '', '')
+  `).bind(orderId, customer.id, customer.salesRepId || "", orderNo, subtotal, discount, total, noteParts.join("\n"), paymentMethod, remittance, remittance ? new Date().toISOString() : "", shippingName, shippingPhone, shippingAddress, shippingCarrier, shippingStoreInfo).run();
+  for (const item of items) {
+    await env.DB.prepare(`
+      INSERT INTO order_items (id, order_id, product_id, product_name, sku, quantity, unit_price, total)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(crypto.randomUUID(), orderId, item.product.id, item.product.name, item.product.sku || item.product.code || "", item.quantity, item.unitPrice, item.total).run();
+  }
+  if (customer.salesRepId) {
+    await env.DB.prepare(`
+      INSERT INTO sales_attributions (id, company_id, order_id, customer_id, sales_rep_id, attribution_source, amount, attributed_at)
+      VALUES (?, 'default', ?, ?, ?, 'customer_binding', ?, datetime('now'))
+    `).bind(crypto.randomUUID(), orderId, customer.id, customer.salesRepId, total).run();
+  }
+  await writeAudit(request, env, "shop.order.create", "order", orderId, null, { orderNo, total, paymentMethod, shippingCarrier, shippingStoreInfo, salesRepId: customer.salesRepId || "" });
+  return json({ ok: true, data: { id: orderId, orderNo, total, paymentMethod, shippingCarrier, shippingStoreInfo, status: "pending", paymentStatus: "unpaid" } });
+}
 async function listProducts(request, env) {
   requireAdmin(request, env);
   requireDb(env);
@@ -963,8 +1208,19 @@ async function updateAdminOrder(request, env, id) {
   const payload = await request.json().catch(() => ({}));
   const status = normalizeOrderStatus(payload.status);
   const paymentStatus = normalizePaymentStatus(payload.paymentStatus, status);
+  const paymentMethod = String(payload.paymentMethod || "").trim();
+  const remittance = String(payload.remittance || "").trim();
   const trackingNumber = String(payload.trackingNumber || "").trim();
   if (status === "shipped" && !trackingNumber) return json({ ok: false, error: "missing_tracking_number" }, 400);
+  const currentOrder = await env.DB.prepare(`
+    SELECT remittance_verified_at AS remittanceVerifiedAt
+    FROM orders
+    WHERE id = ?
+    LIMIT 1
+  `).bind(orderId).first();
+  const remittanceReportedAt = String(payload.remittanceReportedAt || "").trim() || (remittance ? new Date().toISOString() : "");
+  const remittanceVerifiedAt = String(payload.remittanceVerifiedAt || "").trim()
+    || (paymentStatus === "paid" && paymentMethod === "REMITTANCE" && remittance ? (currentOrder?.remittanceVerifiedAt || new Date().toISOString()) : "");
   const result = await env.DB.prepare(`
     UPDATE orders
     SET status = ?, payment_status = ?, payment_method = ?, remittance = ?,
@@ -975,10 +1231,10 @@ async function updateAdminOrder(request, env, id) {
   `).bind(
     status,
     paymentStatus,
-    String(payload.paymentMethod || "").trim(),
-    String(payload.remittance || "").trim(),
-    String(payload.remittanceReportedAt || "").trim(),
-    String(payload.remittanceVerifiedAt || "").trim(),
+    paymentMethod,
+    remittance,
+    remittanceReportedAt,
+    remittanceVerifiedAt,
     String(payload.name || payload.shippingName || "").trim(),
     String(payload.phone || payload.shippingPhone || "").trim(),
     String(payload.shippingAddress || "").trim(),
@@ -990,8 +1246,9 @@ async function updateAdminOrder(request, env, id) {
     orderId
   ).run();
   if (!result.meta?.changes) return json({ ok: false, error: "order_not_found" }, 404);
-  await writeAudit(request, env, "order.update", "order", orderId, null, { id: orderId, status, paymentStatus });
-  return json({ ok: true, data: { id: orderId, status, paymentStatus } });
+  const inventory = await syncOrderInventory(env, orderId, { id: orderId, status, paymentStatus, paymentMethod });
+  await writeAudit(request, env, "order.update", "order", orderId, null, { id: orderId, status, paymentStatus, paymentMethod, inventory });
+  return json({ ok: true, data: { id: orderId, status, paymentStatus, paymentMethod, inventory } });
 }
 async function loadBroadcastDataValue(env) {
   const [tagRows, campaignRows, memberRows, ruleRows] = await Promise.all([
@@ -2580,6 +2837,85 @@ async function monthlySalesReport(request, env) {
   return json({ ok: true, period, data: results || [] });
 }
 
+async function renderShopPage(env) {
+  let settings = defaultHookteaSettings(env);
+  let products = [];
+  let loadError = "";
+  try {
+    [settings, products] = await Promise.all([getPublicHookteaSettings(env), listShopProductRows(env)]);
+  } catch (error) {
+    loadError = String(error?.message || error);
+  }
+  const data = JSON.stringify({ settings, products, loadError }).replace(/</g, "\\u003c");
+  return new Response(`<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtml(settings.shop_hero_title || "HookTea 商城")}</title>
+  <style>
+    :root{--line:#06c755;--ink:#0f172a;--muted:#64748b;--border:#e2e8f0;--bg:#f8fafc;--danger:#dc2626;--warn:#d97706}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer}.wrap{max-width:1180px;margin:0 auto;padding:22px}.hero{background:#fff;border:1px solid var(--border);border-radius:18px;overflow:hidden;margin-bottom:18px}.hero-img{min-height:220px;padding:32px;background:linear-gradient(135deg,#063,#06c755);color:#fff;display:flex;flex-direction:column;justify-content:end}.badge{display:inline-flex;width:max-content;background:#facc15;color:#111827;border-radius:999px;padding:7px 12px;font-weight:900}.hero h1{font-size:34px;margin:18px 0 8px}.hero p{max-width:720px;line-height:1.7;margin:0;color:#ecfdf5;font-weight:700}.tabs{display:flex;gap:8px;overflow:auto;padding:14px;background:#fff;border-top:1px solid var(--border)}.tab{border:1px solid var(--border);background:#fff;border-radius:999px;padding:8px 13px;font-weight:900;white-space:nowrap}.tab.active{background:#ecfdf5;border-color:#86efac;color:#047857}.grid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;align-items:start}.products{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card,.cart{background:#fff;border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.04)}.product-img{aspect-ratio:4/3;background:#f1f5f9;display:flex;align-items:center;justify-content:center;overflow:hidden}.product-img img{width:100%;height:100%;object-fit:cover}.body{padding:16px}.store{font-size:12px;font-weight:900;color:#94a3b8}.name{font-size:18px;font-weight:950;margin:5px 0}.desc{color:#64748b;font-weight:700;line-height:1.55;font-size:14px}.price{font-size:22px;font-weight:950;margin-top:12px}.points{color:#06c755;font-weight:950}.stock{font-size:12px;color:#64748b;margin-top:3px}.add{width:100%;border:0;background:var(--line);color:#fff;border-radius:12px;padding:12px;font-weight:950;margin-top:14px}.cart{position:sticky;top:14px}.cart h2{margin:0;padding:18px;border-bottom:1px solid var(--border);font-size:20px}.cart-inner{padding:16px;display:grid;gap:12px}.cart-row{display:grid;grid-template-columns:1fr auto;gap:8px;border-bottom:1px solid #f1f5f9;padding-bottom:10px}.qty{display:flex;align-items:center;gap:6px}.qty button{width:28px;height:28px;border-radius:8px;border:1px solid var(--border);background:#fff;font-weight:900}.total{display:flex;justify-content:space-between;font-size:20px;font-weight:950;border-top:1px solid var(--border);padding-top:12px}.field{display:grid;gap:6px}.field span{font-size:13px;color:#64748b;font-weight:900}.field input,.field select,.field textarea{width:100%;border:1px solid #cbd5e1;border-radius:12px;padding:11px 12px;background:#fff;font-weight:800}.field textarea{min-height:76px;resize:vertical}.hint{font-size:12px;color:#64748b;font-weight:800;line-height:1.5}.remit{background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:12px;color:#9a3412;font-weight:800;white-space:pre-wrap}.submit{border:0;background:#06c755;color:#fff;border-radius:14px;padding:15px;font-size:18px;font-weight:950}.submit:disabled{opacity:.55}.status{font-weight:900;line-height:1.55}.ok{color:#047857}.err{color:#dc2626}.empty{padding:36px;text-align:center;color:#64748b;font-weight:900;background:#fff;border:1px solid var(--border);border-radius:16px}@media(max-width:900px){.grid{grid-template-columns:1fr}.products{grid-template-columns:1fr}.cart{position:static}.wrap{padding:14px}.hero h1{font-size:28px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <div class="hero-img">
+        <span class="badge" id="heroBadge"></span>
+        <h1 id="heroTitle"></h1>
+        <p id="heroSubtitle"></p>
+      </div>
+      <div class="tabs" id="categoryTabs"></div>
+    </section>
+    <section class="grid">
+      <div><div class="products" id="productGrid"></div></div>
+      <aside class="cart">
+        <h2>購物車 / 結帳</h2>
+        <div class="cart-inner">
+          <div id="cartRows" class="hint">尚未選購商品</div>
+          <div class="total"><span>合計</span><span id="cartTotal">$0</span></div>
+          <label class="field"><span>LINE UID（LIFF 會自動帶入，沒有時可手動填）</span><input id="lineUserId" class="mono" placeholder="U 開頭 UID"></label>
+          <label class="field"><span>收件人姓名</span><input id="shippingName" placeholder="姓名"></label>
+          <label class="field"><span>收件人電話</span><input id="shippingPhone" placeholder="手機"></label>
+          <label class="field"><span>配送方式</span><select id="shippingCarrier"><option value="FAMILY">全家超商取貨</option><option value="SEVEN">7-11 超商取貨</option><option value="POST">宅配 / 郵寄</option></select></label>
+          <label class="field" id="storeField"><span>門市資訊</span><textarea id="shippingStoreInfo" placeholder="門市名稱 / 店號 / 地址"></textarea></label>
+          <label class="field" id="addressField"><span>收件地址</span><textarea id="shippingAddress" placeholder="宅配或郵寄地址"></textarea></label>
+          <label class="field"><span>付款方式</span><select id="paymentMethod"></select></label>
+          <div class="remit" id="remittanceInfo"></div>
+          <label class="field" id="remittanceField"><span>匯款末五碼 / 回報</span><input id="remittance" placeholder="例如：12345"></label>
+          <label class="field"><span>備註</span><textarea id="note" placeholder="發票、配送備註"></textarea></label>
+          <button id="submitOrder" class="submit">送出訂單</button>
+          <div id="orderStatus" class="status"></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+  <script>window.__SHOP_DATA__=${data};</script>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    const initial=window.__SHOP_DATA__||{settings:{},products:[],loadError:""};
+    let settings=initial.settings||{}, products=initial.products||[], activeCategory="ALL", cart=[];
+    const $=id=>document.getElementById(id), money=n=>"$"+Number(n||0).toLocaleString("zh-TW"), esc=s=>String(s||"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    function splitCsv(v){return String(v||"").split(/[,，\n]/).map(s=>s.trim()).filter(Boolean)}
+    function categories(){const configured=splitCsv(settings.shop_categories||"");const fromProducts=[...new Set(products.map(p=>p.category).filter(Boolean))];return ["ALL",...new Set([...configured,...fromProducts])]}
+    function renderHero(){ $("heroBadge").textContent=settings.shop_hero_badge||"新會員限定"; $("heroTitle").textContent=settings.shop_hero_title||"HookTea 精選 LINE 限定商城"; $("heroSubtitle").textContent=settings.shop_hero_subtitle||"訂單送出後會進入 HookTea 後台訂單維護。"; $("remittanceInfo").textContent=settings.remittance_info||"匯款資訊尚未設定，請送出後等候客服通知。"; const methods=splitCsv(settings.shop_payment_methods||"LINEPAY,REMITTANCE,COD"); $("paymentMethod").innerHTML=methods.map(m=>'<option value="'+esc(m.toUpperCase())+'">'+paymentLabel(m)+'</option>').join('')||'<option value="REMITTANCE">銀行匯款</option>'; }
+    function paymentLabel(m){m=String(m||"").toUpperCase();return {LINEPAY:"LINE Pay",REMITTANCE:"銀行匯款",COD:"貨到付款",NEWEBPAY:"線上刷卡",POINTS:"點數折抵"}[m]||m}
+    function renderTabs(){ $("categoryTabs").innerHTML=categories().map(c=>'<button class="tab '+(c===activeCategory?'active':'')+'" data-cat="'+esc(c)+'">'+esc(c==="ALL"?'全部商品':c)+'</button>').join(''); document.querySelectorAll('[data-cat]').forEach(btn=>btn.onclick=()=>{activeCategory=btn.dataset.cat;renderAll()}); }
+    function renderProducts(){ const rows=products.filter(p=>activeCategory==="ALL"||p.category===activeCategory); $("productGrid").innerHTML=rows.map(p=>'<article class="card"><div class="product-img">'+(p.image?'<img src="'+esc(p.image)+'" alt="">':'<span class="hint">尚未上傳圖片</span>')+'</div><div class="body"><div class="store">'+esc(p.storeName||"HookTea")+'</div><div class="name">'+esc(p.name)+'</div><div class="desc">'+esc(p.subtitle||p.description||"")+'</div><div class="price">'+money(p.price)+'</div><div class="points">最高可扣 '+Number(p.pointsPrice||0).toLocaleString("zh-TW")+' 點</div><div class="stock">'+(p.stockUnlimited?'不限量':'庫存 '+Number(p.stockQty||0).toLocaleString("zh-TW"))+'</div><button class="add" data-add="'+esc(p.id)+'">加入購物車</button></div></article>').join('')||'<div class="empty">目前沒有上架商品</div>'; document.querySelectorAll('[data-add]').forEach(btn=>btn.onclick=()=>addCart(btn.dataset.add)); }
+    function addCart(id){const p=products.find(x=>x.id===id);if(!p)return;const row=cart.find(x=>x.id===id);if(row)row.quantity+=1;else cart.push({id:p.id,name:p.name,price:p.price,quantity:1});renderCart()}
+    function setQty(id,delta){const row=cart.find(x=>x.id===id);if(!row)return;row.quantity+=delta;if(row.quantity<=0)cart=cart.filter(x=>x.id!==id);renderCart()}
+    function renderCart(){ if(!cart.length){$("cartRows").className="hint";$("cartRows").textContent="尚未選購商品";}else{$("cartRows").className="";$("cartRows").innerHTML=cart.map(i=>'<div class="cart-row"><div><b>'+esc(i.name)+'</b><div class="hint">'+money(i.price)+' x '+i.quantity+'</div></div><div class="qty"><button data-dec="'+esc(i.id)+'">-</button><b>'+i.quantity+'</b><button data-inc="'+esc(i.id)+'">+</button></div></div>').join('');document.querySelectorAll('[data-dec]').forEach(b=>b.onclick=()=>setQty(b.dataset.dec,-1));document.querySelectorAll('[data-inc]').forEach(b=>b.onclick=()=>setQty(b.dataset.inc,1));} $("cartTotal").textContent=money(cart.reduce((s,i)=>s+i.price*i.quantity,0)); }
+    function renderShipping(){const cvs=["FAMILY","SEVEN"].includes($("shippingCarrier").value);$("storeField").style.display=cvs?"grid":"none";$("addressField").style.display=cvs?"none":"grid"}
+    function renderPayment(){const remit=$("paymentMethod").value==="REMITTANCE";$("remittanceField").style.display=remit?"grid":"none";$("remittanceInfo").style.display=remit?"block":"none"}
+    async function initLiff(){try{if(!settings.liff_id||!window.liff)return;await liff.init({liffId:settings.liff_id});if(!liff.isLoggedIn()){return}const profile=await liff.getProfile();$("lineUserId").value=profile.userId||"";if(!$("shippingName").value)$("shippingName").value=profile.displayName||"";}catch(e){console.warn(e)}}
+    async function submitOrder(){const status=$("orderStatus");status.className="status";status.textContent="";if(!cart.length){status.className="status err";status.textContent="請先加入商品";return}const payload={lineUserId:$("lineUserId").value,displayName:$("shippingName").value,shippingName:$("shippingName").value,shippingPhone:$("shippingPhone").value,shippingCarrier:$("shippingCarrier").value,shippingStoreInfo:$("shippingStoreInfo").value,shippingAddress:$("shippingAddress").value,paymentMethod:$("paymentMethod").value,remittance:$("remittance").value,note:$("note").value,entryUrl:location.href,entryParams:location.search,items:cart.map(i=>({productId:i.id,quantity:i.quantity}))};$("submitOrder").disabled=true;status.textContent="訂單送出中";try{const res=await fetch('/api/shop/orders',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(!res.ok||data.ok===false)throw new Error(data.error||('HTTP '+res.status));cart=[];renderCart();status.className="status ok";status.textContent="訂單已建立："+data.data.orderNo+"，後台可進行匯款核帳與出貨維護。";}catch(e){status.className="status err";status.textContent="送出失敗："+e.message;}finally{$("submitOrder").disabled=false}}
+    function renderAll(){renderHero();renderTabs();renderProducts();renderCart();renderShipping();renderPayment();if(initial.loadError){$("orderStatus").className="status err";$("orderStatus").textContent="商品讀取失敗："+initial.loadError}}
+    $("shippingCarrier").onchange=renderShipping;$("paymentMethod").onchange=renderPayment;$("submitOrder").onclick=submitOrder;renderAll();initLiff();
+  </script>
+</body>
+</html>`, { headers: HTML_HEADERS });
+}
 async function renderSalesInvitePage(request, env) {
   const url = new URL(request.url);
   const salesCode = normalizeSalesCode(url.searchParams.get("sales") || url.searchParams.get("ref") || "");
