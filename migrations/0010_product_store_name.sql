@@ -1,0 +1,1 @@
+ALTER TABLE products ADD COLUMN store_name TEXT NOT NULL DEFAULT '';
