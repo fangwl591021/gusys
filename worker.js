@@ -32,6 +32,7 @@ export default {
       if (url.pathname === "/sales/invite") return renderSalesInvitePage(request, env);
       if (url.pathname.startsWith("/api/admin/webhook") && request.method === "GET") return listAdminWebhookEvents(request, env);
       if (url.pathname === "/api/admin/summary" && request.method === "GET") return adminSummary(request, env);
+      if (url.pathname === "/api/admin/audit-logs" && request.method === "GET") return listAuditLogs(request, env);
       if (url.pathname === "/api/admin/customers" && request.method === "GET") return listAdminCustomers(request, env);
       if (url.pathname === "/api/admin/customers" && request.method === "PATCH") return updateAdminCustomer(request, env);
       if (url.pathname === "/api/admin/customers/sync-profiles" && request.method === "POST") return syncAdminCustomerProfiles(request, env);
@@ -85,6 +86,22 @@ class HttpError extends Error {
     this.status = status;
   }
 }
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), { status, headers: JSON_HEADERS });
+}
+
+function parseJson(text, fallback = null) {
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function requireDb(env) {
+  if (!env.DB) throw new HttpError(500, "d1_binding_missing");
+}
+
 async function handleLineWebhook(request, env, ctx) {
   if (request.method === "GET") {
     return new Response("Gusys LINE webhook endpoint", { status: 200, headers: TEXT_HEADERS });
@@ -786,6 +803,7 @@ async function createProduct(request, env) {
       store_name, subtitle, badge, image, description, source, sort_order, status, created_at, updated_at
     ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
   `).bind(id, product.sku, product.code, name, product.category, product.unit, product.price, product.cost, product.originalPrice, product.pointsPrice, product.stockQty, product.safetyStockQty, product.stockUnlimited, product.storeName, product.subtitle, product.badge, product.image, product.description, product.source, product.sortOrder, product.status).run();
+  await writeAudit(request, env, "product.create", "product", id, null, { id, sku: product.sku, code: product.code, name });
   return json({ ok: true, data: { id, sku: product.sku, code: product.code, name } });
 }
 
@@ -835,6 +853,7 @@ async function updateProduct(request, env, id) {
     WHERE id = ?
   `).bind(product.sku, product.code, name, product.category, product.unit, product.price, product.cost, product.originalPrice, product.pointsPrice, product.stockQty, product.safetyStockQty, product.stockUnlimited, product.storeName, product.subtitle, product.badge, product.image, product.description, product.source, product.sortOrder, product.status, productId).run();
   if (!result.meta?.changes) return json({ ok: false, error: "product_not_found" }, 404);
+  await writeAudit(request, env, "product.update", "product", productId, null, { id: productId, sku: product.sku, code: product.code, name });
   return json({ ok: true, data: { id: productId, sku: product.sku, code: product.code, name } });
 }
 
@@ -845,6 +864,7 @@ async function deleteProduct(request, env, id) {
   if (!productId) return json({ ok: false, error: "missing_product_id" }, 400);
   const result = await env.DB.prepare(`UPDATE products SET status = 'inactive', updated_at = datetime('now') WHERE id = ?`).bind(productId).run();
   if (!result.meta?.changes) return json({ ok: false, error: "product_not_found" }, 404);
+  await writeAudit(request, env, "product.delete", "product", productId, null, { id: productId, status: "inactive" });
   return json({ ok: true, data: { id: productId, status: "inactive" } });
 }
 
@@ -969,6 +989,7 @@ async function updateAdminOrder(request, env, id) {
     orderId
   ).run();
   if (!result.meta?.changes) return json({ ok: false, error: "order_not_found" }, 404);
+  await writeAudit(request, env, "order.update", "order", orderId, null, { id: orderId, status, paymentStatus });
   return json({ ok: true, data: { id: orderId, status, paymentStatus } });
 }
 async function loadBroadcastDataValue(env) {
@@ -1258,7 +1279,9 @@ async function sendPaidBroadcast(request, env) {
   requireAdmin(request, env);
   requireDb(env);
   const payload = await request.json().catch(() => ({}));
-  return json({ ok: true, data: await executePaidBroadcast(env, payload, { allowTest: true }) });
+  const result = await executePaidBroadcast(env, payload, { allowTest: true });
+  await writeAudit(request, env, payload.testMode ? "broadcast.test" : "broadcast.send", "paid_broadcast", result.campaign?.id || "", null, result.campaign || result);
+  return json({ ok: true, data: result });
 }
 
 async function handleActionAdminCompat(request, env) {
@@ -1388,6 +1411,105 @@ function requireAdmin(request, env) {
   const provided = request.headers.get("x-admin-token") || url.searchParams.get("token") || "";
   if (provided !== token) throw new HttpError(401, "admin_unauthorized");
 }
+function auditActor(request) {
+  const url = new URL(request.url);
+  const token = String(request.headers.get("x-admin-token") || url.searchParams.get("token") || "").trim();
+  return token ? `admin:${token.slice(-6)}` : "admin";
+}
+
+async function writeAudit(request, env, action, entityType, entityId, beforeValue, afterValue) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(`
+      INSERT INTO audit_logs (id, actor_id, actor_role, action, entity_type, entity_id, before_json, after_json, created_at)
+      VALUES (?, ?, 'admin', ?, ?, ?, ?, ?, datetime('now'))
+    `).bind(
+      crypto.randomUUID(),
+      auditActor(request),
+      String(action || ""),
+      String(entityType || ""),
+      String(entityId || ""),
+      beforeValue == null ? null : JSON.stringify(beforeValue),
+      afterValue == null ? null : JSON.stringify(afterValue),
+    ).run();
+  } catch (error) {
+    console.warn("audit_write_failed", error?.message || error);
+  }
+}
+
+async function listAuditLogs(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const url = new URL(request.url);
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 100), 1), 300);
+  const rows = [];
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT created_at AS createdAt, actor_id AS actorId, action, entity_type AS entityType, entity_id AS entityId,
+             before_json AS beforeJson, after_json AS afterJson
+      FROM audit_logs
+      ORDER BY datetime(created_at) DESC
+      LIMIT ?
+    `).bind(limit).all();
+    rows.push(...(results || []).map(row => ({
+      type: "後台操作",
+      createdAt: row.createdAt || "",
+      action: row.action || "",
+      actor: row.actorId || "admin",
+      target: [row.entityType, row.entityId].filter(Boolean).join(" / "),
+      summary: summarizeAuditChange(row.beforeJson, row.afterJson),
+    })));
+  } catch (error) {
+    if (!String(error?.message || error).includes("no such table")) throw error;
+  }
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT created_at AS createdAt, source, message_text AS messageText, mother_status AS motherStatus
+      FROM webhook_events
+      ORDER BY datetime(created_at) DESC
+      LIMIT ?
+    `).bind(limit).all();
+    rows.push(...(results || []).map(row => ({
+      type: "母站轉送",
+      createdAt: row.createdAt || "",
+      action: row.source || "webhook",
+      actor: "LINE",
+      target: row.motherStatus ? `HTTP ${row.motherStatus}` : "",
+      summary: row.messageText || "已轉送母站",
+    })));
+  } catch (error) {
+    if (!String(error?.message || error).includes("no such table")) throw error;
+  }
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT created_at AS createdAt, sender_id AS senderId, message_text AS messageText, thread_id AS threadId
+      FROM line_messages
+      ORDER BY datetime(created_at) DESC
+      LIMIT ?
+    `).bind(limit).all();
+    rows.push(...(results || []).map(row => ({
+      type: "LINE 訊息",
+      createdAt: row.createdAt || "",
+      action: "message",
+      actor: row.senderId || "",
+      target: row.threadId || "",
+      summary: row.messageText || "",
+    })));
+  } catch (error) {
+    if (!String(error?.message || error).includes("no such table")) throw error;
+  }
+  rows.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  return json({ ok: true, data: rows.slice(0, limit) });
+}
+
+function summarizeAuditChange(beforeJson, afterJson) {
+  const beforeValue = parseJson(beforeJson || "{}", {});
+  const afterValue = parseJson(afterJson || "{}", {});
+  const keys = new Set([...Object.keys(beforeValue || {}), ...Object.keys(afterValue || {})]);
+  const changed = [...keys].filter(key => JSON.stringify(beforeValue?.[key]) !== JSON.stringify(afterValue?.[key]));
+  return changed.length ? changed.slice(0, 8).join("、") : "已記錄";
+}
+
 function crmSalesCode(lineUserId) {
   return normalizeSalesCode(`CRM-${String(lineUserId || "").trim().slice(-10)}`);
 }
@@ -2435,266 +2557,6 @@ async function renderSalesInvitePage(request, env) {
 </html>`, { headers: HTML_HEADERS });
 }
 
-function renderAdminPage(env) {
-  const publicUrl = env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev";
-  return new Response(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gusys Admin</title><style>body{margin:0;background:#f6f7f9;color:#1f2937;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px}header{background:#fff;border-bottom:1px solid #d9dee7;padding:14px 18px;position:sticky;top:0}main{max-width:1180px;margin:auto;padding:16px 18px 36px}h1{font-size:18px;margin:0}.muted{color:#667085}.tabs{display:flex;gap:8px;overflow:auto;margin-bottom:12px}.tab,button{border:1px solid #0f766e;border-radius:6px;background:#0f766e;color:#fff;padding:9px 12px;cursor:pointer}.tab{background:#fff;color:#344054;border-color:#d9dee7}.tab.active{background:#0f766e;color:#fff;border-color:#0f766e}input{border:1px solid #cfd6e1;border-radius:6px;padding:9px 10px}.bar{display:flex;justify-content:space-between;gap:12px;align-items:center}.actions{display:flex;gap:8px}.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.metric,.panel{background:#fff;border:1px solid #d9dee7;border-radius:8px}.metric{padding:14px}.metric span{display:block;color:#667085;font-size:12px}.metric strong{display:block;font-size:26px;margin-top:8px}.panel{margin-top:12px}.panel h2{font-size:15px;margin:0;padding:12px 14px;border-bottom:1px solid #d9dee7}.body{padding:14px}.view{display:none}.view.active{display:block}.form{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:720px}th,td{border-bottom:1px solid #edf0f5;text-align:left;padding:10px;vertical-align:top}th{font-size:12px;color:#667085;background:#fafbfc}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}.pill{border-radius:999px;padding:3px 8px;font-size:12px;background:#fef3c7;color:#92400e}.pill.good{background:#dcfce7;color:#166534}.pill.bad{background:#fee2e2;color:#991b1b}.qr{width:70px;height:70px;border:1px solid #d9dee7;border-radius:6px}.log{white-space:pre-wrap;max-width:420px;color:#475467}.empty{text-align:center;color:#667085;padding:20px}@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.form{grid-template-columns:1fr}.bar{align-items:flex-start;flex-direction:column}.actions{width:100%}.actions input{flex:1}}</style></head><body><header><div class="bar"><div><h1>Gusys Admin</h1><div class="muted">經銷商 LINE OA 控制台</div></div><div class="actions"><input id="adminToken" type="password" placeholder="Admin token"><button id="saveToken">儲存</button><button id="refreshAll">更新</button></div></div></header><main><nav class="tabs" id="tabs"><button class="tab active" data-view="dashboard">總覽</button><button class="tab" data-view="sales">業務 QR</button><button class="tab" data-view="customers">用戶歸屬</button><button class="tab" data-view="inventory">進銷存</button><button class="tab" data-view="messages">LINE 訊息</button><button class="tab" data-view="ai">AI 監控</button><button class="tab" data-view="webhooks">Webhook</button></nav><section class="view active" id="view-dashboard"><div class="grid" id="metrics"></div><section class="panel"><h2>最近母站轉送</h2><div class="body" id="latestMother"></div></section></section><section class="view" id="view-sales"><section class="panel"><h2>新增業務</h2><div class="body"><div class="form"><input id="salesName" placeholder="姓名"><input id="salesPhone" placeholder="電話"><input id="salesLine" placeholder="LINE User ID"><input id="salesCode" placeholder="業務代碼，可空白"></div><button id="createSales">建立業務 QR</button><span id="salesStatus" class="muted"></span></div></section><section class="panel"><h2>業務清單</h2><div class="body table-wrap"><table><thead><tr><th>業務</th><th>代碼</th><th>QR</th><th>連結</th><th>狀態</th></tr></thead><tbody id="salesRows"></tbody></table></div></section></section><section class="view" id="view-customers"><section class="panel"><h2>用戶歸屬</h2><div class="body table-wrap"><table><thead><tr><th>用戶</th><th>LINE UID</th><th>業務</th><th>電話</th><th>綁定時間</th></tr></thead><tbody id="customerRows"></tbody></table></div></section></section><section class="view" id="view-inventory"><section class="panel"><h2>新增商品</h2><div class="body"><div class="form"><input id="productSku" placeholder="SKU"><input id="productCategory" placeholder="分類"><input id="productName" placeholder="商品名稱"><input id="productPrice" type="number" placeholder="售價"><input id="productCost" type="number" placeholder="成本"><input id="productStock" type="number" placeholder="庫存"><input id="productSafety" type="number" placeholder="安全庫存"></div><button id="createProduct">建立商品</button><span id="productStatus" class="muted"></span></div></section><section class="panel"><h2>商品庫存</h2><div class="body table-wrap"><table><thead><tr><th>商品</th><th>SKU</th><th>分類</th><th>售價</th><th>庫存</th><th>狀態</th></tr></thead><tbody id="productRows"></tbody></table></div></section></section><section class="view" id="view-messages"><section class="panel"><h2>LINE 訊息</h2><div class="body"><button id="runAi">AI 分析最新訊息</button> <span id="aiRunStatus" class="muted"></span><div class="table-wrap"><table><thead><tr><th>時間</th><th>LINE UID</th><th>內容</th><th>Thread</th></tr></thead><tbody id="messageRows"></tbody></table></div></div></section></section><section class="view" id="view-ai"><section class="panel"><h2>AI 監控洞察</h2><div class="body table-wrap"><table><thead><tr><th>時間</th><th>風險</th><th>分類</th><th>摘要</th><th>建議</th></tr></thead><tbody id="aiRows"></tbody></table></div></section></section><section class="view" id="view-webhooks"><section class="panel"><h2>Webhook 診斷</h2><div class="body table-wrap"><table><thead><tr><th>時間</th><th>來源</th><th>訊息</th><th>母站</th><th>摘要</th></tr></thead><tbody id="webhookRows"></tbody></table></div></section></section></main><script>const publicUrl=${JSON.stringify(publicUrl)};let adminToken=localStorage.getItem('gusys_admin_token')||'';document.getElementById('adminToken').value=adminToken;const qs=s=>document.querySelector(s);const money=v=>new Intl.NumberFormat('zh-TW').format(Number(v||0));function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}function authHeaders(){return adminToken?{'x-admin-token':adminToken}:{}}async function api(path,opt){const init=opt||{};init.headers=Object.assign({'content-type':'application/json'},authHeaders(),init.headers||{});const res=await fetch(path,init);const data=await res.json().catch(()=>({ok:false,error:'bad_json'}));if(!res.ok||!data.ok)throw new Error(data.error||data.message||('HTTP '+res.status));return data.data||data}document.getElementById('tabs').onclick=e=>{const b=e.target.closest('.tab');if(!b)return;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+b.dataset.view));};document.getElementById('saveToken').onclick=()=>{adminToken=qs('#adminToken').value.trim();localStorage.setItem('gusys_admin_token',adminToken);loadAll()};document.getElementById('refreshAll').onclick=()=>loadAll();document.getElementById('createSales').onclick=async()=>{try{await api('/api/sales/reps',{method:'POST',body:JSON.stringify({name:qs('#salesName').value,phone:qs('#salesPhone').value,lineUserId:qs('#salesLine').value,salesCode:qs('#salesCode').value})});qs('#salesStatus').textContent=' 已建立';await loadSales();await loadSummary()}catch(e){qs('#salesStatus').textContent=e.message}};document.getElementById('createProduct').onclick=async()=>{try{await api('/api/products',{method:'POST',body:JSON.stringify({sku:qs('#productSku').value,category:qs('#productCategory').value,name:qs('#productName').value,price:qs('#productPrice').value,cost:qs('#productCost').value,stockQty:qs('#productStock').value,safetyStockQty:qs('#productSafety').value})});qs('#productStatus').textContent=' 已建立';await loadProducts();await loadSummary()}catch(e){qs('#productStatus').textContent=e.message}};document.getElementById('runAi').onclick=async()=>{qs('#aiRunStatus').textContent='分析中';try{await api('/api/ai-monitor/analyze',{method:'POST',body:JSON.stringify({limit:30})});qs('#aiRunStatus').textContent='完成';await loadAi()}catch(e){qs('#aiRunStatus').textContent=e.message}};async function loadSummary(){const s=await api('/api/admin/summary');qs('#metrics').innerHTML=[['業務',s.sales],['用戶',s.customers],['商品',s.products],['LINE 訊息',s.messages],['母站轉送',s.webhooks],['高風險',s.highRisk]].map(x=>'<div class="metric"><span>'+esc(x[0])+'</span><strong>'+money(x[1])+'</strong></div>').join('');const lm=s.latestMother||{};qs('#latestMother').innerHTML='<div>Worker：<span class="mono">'+esc(publicUrl)+'</span></div><div>訊息：'+esc(lm.messageText)+'</div><div>時間：'+esc(lm.createdAt)+'</div><pre class="log">'+esc(lm.rawJson||'')+'</pre>'}async function loadSales(){const rows=await api('/api/sales/reps');qs('#salesRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.name)+'<div class="muted">'+esc(r.phone)+'</div></td><td class="mono">'+esc(r.salesCode)+'</td><td>'+(r.qrUrl?'<img class="qr" src="'+esc(r.qrUrl)+'">':'-')+'</td><td><a href="'+esc(r.inviteUrl)+'" target="_blank">開啟</a><div class="mono">'+esc(r.inviteUrl)+'</div></td><td><span class="pill good">'+esc(r.status)+'</span></td></tr>').join('')||'<tr><td colspan="5" class="empty">尚無業務</td></tr>'}async function loadCustomers(){const rows=await api('/api/admin/customers');qs('#customerRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.displayName||'-')+'</td><td class="mono">'+esc(r.lineUserId)+'</td><td>'+esc(r.salesName||'未綁定')+'<div class="mono">'+esc(r.salesCode||'')+'</div></td><td>'+esc(r.phone)+'</td><td>'+esc(r.boundAt||r.firstSeenAt)+'</td></tr>').join('')||'<tr><td colspan="5" class="empty">尚無用戶</td></tr>'}async function loadProducts(){const rows=await api('/api/products');qs('#productRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td class="mono">'+esc(r.sku)+'</td><td>'+esc(r.category)+'</td><td>'+money(r.price)+'</td><td>'+money(r.stockQty)+' / '+money(r.safetyStockQty)+'</td><td><span class="pill">'+esc(r.status)+'</span></td></tr>').join('')||'<tr><td colspan="6" class="empty">尚無商品</td></tr>'}async function loadMessages(){const rows=await api('/api/admin/line-messages');qs('#messageRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td>'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join('')||'<tr><td colspan="4" class="empty">尚無訊息</td></tr>'}async function loadWebhooks(){const rows=await api('/api/admin/webhooks');qs('#webhookRows').innerHTML=rows.map(r=>{const s=r.summary||{};const cls=s.invalidSignature?'bad':(s.hasReplyPayload?'good':'');return '<tr><td>'+esc(r.createdAt)+'</td><td>'+esc(r.source)+'</td><td>'+esc(r.messageText)+'</td><td>'+esc(r.motherStatus)+'</td><td><span class="pill '+cls+'">'+(s.invalidSignature?'簽章錯誤':(s.hasReplyPayload?'有回覆':'已送達'))+'</span><pre class="log">'+esc(s.bodyTail||'')+'</pre></td></tr>'}).join('')||'<tr><td colspan="5" class="empty">尚無紀錄</td></tr>'}async function loadAi(){const rows=await api('/api/ai-monitor/insights?limit=100');qs('#aiRows').innerHTML=rows.map(r=>'<tr><td>'+esc(r.createdAt)+'</td><td><span class="pill '+(r.riskLevel==='high'?'bad':r.riskLevel==='medium'?'':'good')+'">'+esc(r.riskLevel)+'</span></td><td>'+esc(r.category)+'</td><td>'+esc(r.summary)+'</td><td>'+esc(r.recommendedAction)+'</td></tr>').join('')||'<tr><td colspan="5" class="empty">尚無 AI 洞察</td></tr>'}async function loadAll(){try{await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadMessages(),loadWebhooks(),loadAi()])}catch(e){qs('#latestMother').innerHTML='<span style="color:#b91c1c">'+esc(e.message)+'</span>'}}loadAll();</script></body></html>`, { headers: HTML_HEADERS });
-}
-function renderHome(env) {
-  const publicUrl = env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev";
-  return new Response(`<!doctype html>
-<html lang="zh-Hant">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gusys 經銷商系統</title>
-  <style>
-    body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f8fafc;color:#0f172a}
-    main{max-width:860px;margin:0 auto;padding:32px 20px}
-    h1{font-size:30px;margin:0 0 8px}
-    section{background:white;border:1px solid #e2e8f0;border-radius:8px;padding:18px;margin-top:16px}
-    code{background:#f1f5f9;border-radius:6px;padding:2px 6px}
-    li{margin:8px 0}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Gusys 經銷商 LINE OA 系統</h1>
-    <p>公司 > 業務 > 用戶；業務 QR 綁定後作為訂單業績歸屬依據。</p>
-    <section>
-      <h2>Webhook</h2>
-      <ul>
-        <li>LINE Webhook URL：<code>${escapeHtml(publicUrl)}/line-webhook</code></li>
-        <li>診斷頁：<code>${escapeHtml(publicUrl)}/hub-test</code></li>
-        <li>母站 webhook：<code>${escapeHtml(env.MOTHER_WEBHOOK_URL || "")}</code></li>
-      </ul>
-    </section>
-    <section>
-      <h2>第一階段功能</h2>
-      <ul>
-        <li>雙 webhook：LINE OA -> Gusys Worker -> 母站 10279</li>
-        <li>LINE 訊息紀錄：D1 有綁定時寫入 line_threads / line_messages</li>
-        <li>業務 QR：每位業務產生 invite URL 與 QR URL</li>
-        <li>用戶歸屬：customer_sales_bindings 鎖定業務</li>
-        <li>點數 adapter：會員建立、贈點/扣點、點數紀錄查詢</li>
-        <li>AI 監控：LINE 訊息分類、摘要、風險標籤</li>
-      </ul>
-    </section>
-  </main>
-</body>
-</html>`, { headers: HTML_HEADERS });
-}
-
-async function handleHubTest(env) {
-  const motherUrl = env.MOTHER_WEBHOOK_URL || "";
-  const mother = motherUrl
-    ? await testMotherWebhook(motherUrl)
-    : { configured: false, ok: false, status: 0 };
-
-  return json({
-    ok: true,
-    worker: "gusys",
-    time: new Date().toISOString(),
-    bindings: {
-      DB: Boolean(env.DB),
-      LINE_CHANNEL_SECRET: Boolean(env.LINE_CHANNEL_SECRET),
-      LINE_CHANNEL_ACCESS_TOKEN: Boolean(env.LINE_CHANNEL_ACCESS_TOKEN),
-      MOTHER_WEBHOOK_URL: Boolean(env.MOTHER_WEBHOOK_URL),
-      MOTHER_LINE_CHANNEL_SECRET: Boolean(env.MOTHER_LINE_CHANNEL_SECRET),
-      WETW_API_KEY: Boolean(env.WETW_API_KEY),
-      WETW_SHOP_ID: Boolean(env.WETW_SHOP_ID),
-      OPENAI_API_KEY: Boolean(env.OPENAI_API_KEY),
-    },
-    wetw: wetwConfig(env).configured,
-    motherWebhook: {
-      url: motherUrl,
-      ...mother,
-    },
-    line: {
-      webhookUrl: `${env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev"}/line-webhook`,
-    },
-  });
-}
-
-async function testMotherWebhook(url) {
-  const startedAt = Date.now();
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "HUB_TEST", source: "gusys" }),
-    });
-    return {
-      configured: true,
-      ok: response.ok,
-      status: response.status,
-      elapsedMs: Date.now() - startedAt,
-    };
-  } catch (error) {
-    return {
-      configured: true,
-      ok: false,
-      status: 0,
-      elapsedMs: Date.now() - startedAt,
-      error: String(error?.message || error),
-    };
-  }
-}
-
-async function verifyLineSignature(rawBody, signature, secret) {
-  if (!secret) return { ok: true, reason: "secret_not_configured" };
-  if (!signature) return { ok: false, reason: "missing_signature" };
-
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody));
-  const expected = arrayBufferToBase64(digest);
-  return {
-    ok: timingSafeEqual(expected, signature),
-    reason: "checked",
-  };
-}
-
-function timingSafeEqual(a, b) {
-  const left = new TextEncoder().encode(String(a || ""));
-  const right = new TextEncoder().encode(String(b || ""));
-  let diff = left.length ^ right.length;
-  const length = Math.max(left.length, right.length);
-  for (let i = 0; i < length; i += 1) {
-    diff |= (left[i] || 0) ^ (right[i] || 0);
-  }
-  return diff === 0;
-}
-
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-async function recordWebhookDebug(env, key, value) {
-  if (!env.GUSYS_KV) return;
-  await env.GUSYS_KV.put(key, JSON.stringify(value), { expirationTtl: 86400 * 7 }).catch(() => {});
-}
-
-function workerPublicBase(env) {
-  return String(env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev").replace(/\/+$/, "");
-}
-
-function motherMemberBaseUrl(env) {
-  return String(env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || env.MOTHER_WEBHOOK_URL || "https://aiwe.cc/index.php/line_login/10279/").trim();
-}
-
-function buildSalesInviteUrl(env, salesCode) {
-  const url = new URL(motherMemberBaseUrl(env));
-  const code = normalizeSalesCode(salesCode || "");
-  if (code) url.searchParams.set("sales", code);
-  url.searchParams.set("source", "sales_qr");
-  const bindUrl = new URL(`${workerPublicBase(env)}/api/sales/bind`);
-  if (code) bindUrl.searchParams.set("sales", code);
-  bindUrl.searchParams.set("source", "mother_site");
-  url.searchParams.set("gusys_bind", bindUrl.toString());
-  return url.toString();
-}
-
-function buildQrUrl(inviteUrl) {
-  return `https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=18&data=${encodeURIComponent(inviteUrl)}`;
-}
-
-function makeSalesCode(name) {
-  const base = String(name || "SALES")
-    .normalize("NFKD")
-    .replace(/[^A-Za-z0-9]/g, "")
-    .slice(0, 10)
-    .toUpperCase() || "SALES";
-  const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
-  return `${base}-${suffix}`;
-}
-
-function normalizeSalesCode(value) {
-  return String(value || "")
-    .trim()
-    .replace(/[^A-Za-z0-9_-]/g, "")
-    .toUpperCase()
-    .slice(0, 40);
-}
-
-function currentPeriod() {
-  return new Date().toISOString().slice(0, 7);
-}
-
-function nextPeriodStart(period) {
-  const match = String(period || "").match(/^(\d{4})-(\d{2})$/);
-  if (!match) return new Date().toISOString();
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const next = month === 12
-    ? new Date(Date.UTC(year + 1, 0, 1))
-    : new Date(Date.UTC(year, month, 1));
-  return next.toISOString();
-}
-
-function requireDb(env) {
-  if (!env.DB) throw new Error("D1 DB binding is not configured");
-}
-
-function parseJson(text, fallback) {
-  try {
-    return JSON.parse(text);
-  } catch (_) {
-    return fallback;
-  }
-}
-
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data, null, 2), { status, headers: JSON_HEADERS });
-}
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-async function renderShopPage(env) {
-  requireDb(env);
-  const { results } = await env.DB.prepare(`
-    SELECT id, sku, code, name, category, unit, price,
-           original_price AS originalPrice, points_price AS pointsPrice,
-           stock_qty AS stockQty, stock_unlimited AS stockUnlimited,
-           subtitle, badge, image, description, status, sort_order AS sortOrder
-    FROM products
-    WHERE status = 'active'
-    ORDER BY sort_order ASC, category ASC, updated_at DESC, created_at DESC
-    LIMIT 200
-  `).all();
-  const products = results || [];
-  const categories = [...new Set(products.map(p => p.category || "未分類"))];
-  const groups = categories.map(category => {
-    const cards = products.filter(p => (p.category || "未分類") === category).map(p => {
-      const price = new Intl.NumberFormat("zh-TW").format(Number(p.price || 0));
-      const original = Number(p.originalPrice || 0) > Number(p.price || 0) ? `<span class="original-price">$${escapeHtml(new Intl.NumberFormat("zh-TW").format(Number(p.originalPrice || 0)))}</span>` : "";
-      const points = Number(p.pointsPrice || 0) ? `<span class="points">可扣 ${escapeHtml(p.pointsPrice)} 點</span>` : "";
-      const stock = p.stockUnlimited ? "不限量" : `庫存 ${escapeHtml(p.stockQty ?? 0)} ${escapeHtml(p.unit || "件")}`;
-      const media = p.image ? `<img class="product-image" src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name || "商品")}">` : `<div class="product-media-fallback">${escapeHtml(String(p.name || "商品").slice(0, 1))}</div>`;
-      return `<article class="product-card"><div class="product-media">${media}${p.badge ? `<span class="badge">${escapeHtml(p.badge)}</span>` : ""}</div><div class="product-body"><div class="product-meta">${escapeHtml(p.code || p.sku || "")}</div><h3>${escapeHtml(p.name || "未命名商品")}</h3>${p.subtitle ? `<p class="subtitle">${escapeHtml(p.subtitle)}</p>` : ""}${p.description ? `<p class="description">${escapeHtml(p.description)}</p>` : ""}<div class="product-row"><div><strong>$${escapeHtml(price)}</strong>${original}</div><span>${escapeHtml(stock)}</span></div>${points}</div></article>`;
-    }).join("");
-    return `<section class="category"><h2>${escapeHtml(category)}</h2><div class="grid">${cards}</div></section>`;
-  }).join("");
-  return new Response(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gusys &#21830;&#22478;</title><style>*{box-sizing:border-box}body{margin:0;background:#050505;color:#fff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.app{max-width:1120px;margin:0 auto;padding:28px 18px 56px}.top{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:28px}.brand{font-size:28px;font-weight:900}.muted{color:#9ca3af}.category{margin-top:28px}.category h2{font-size:20px;margin:0 0 14px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.product-card{background:#111;border:1px solid #262626;border-radius:12px;overflow:hidden}.product-media{height:170px;background:#18181b;position:relative;display:flex;align-items:center;justify-content:center}.product-image{width:100%;height:100%;object-fit:cover;display:block}.product-media-fallback{font-size:56px;font-weight:900;color:#facc15}.badge{position:absolute;left:12px;top:12px;background:#06c755;color:#fff;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:900}.product-body{padding:14px}.product-meta{color:#8d8d8d;font-size:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.product-card h3{font-size:17px;line-height:1.35;margin:8px 0 8px}.subtitle{margin:0 0 8px;color:#d1d5db;font-size:13px;font-weight:800}.description{margin:0 0 14px;color:#9ca3af;font-size:13px;line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.product-row{display:flex;align-items:flex-end;justify-content:space-between;gap:10px}.product-row strong{color:#fde68a;font-size:22px}.original-price{display:block;color:#737373;font-size:12px;text-decoration:line-through;margin-top:2px}.product-row span,.points{color:#a7f3d0;font-size:13px;font-weight:800}.points{display:inline-block;margin-top:10px;background:#052e24;border:1px solid #14532d;border-radius:999px;padding:4px 8px}.empty{border:1px dashed #333;border-radius:12px;padding:40px;text-align:center;color:#9ca3af}@media(max-width:760px){.top{align-items:flex-start;flex-direction:column}.grid{grid-template-columns:1fr 1fr}.product-media{height:140px}}@media(max-width:480px){.grid{grid-template-columns:1fr}}</style></head><body><main class="app"><header class="top"><div><div class="brand">Gusys &#21830;&#22478;</div><div class="muted">HookTea &#21830;&#21697;&#23637;&#31034;</div></div><div class="muted">${products.length} &#20214;&#21830;&#21697;</div></header>${groups || '<div class="empty">&#30446;&#21069;&#27794;&#26377;&#19978;&#26550;&#21830;&#21697;</div>'}</main></body></html>`, { headers: HTML_HEADERS });
-}
-
 function renderActionModulesPage(request) {
   const viewParam = new URL(request.url).searchParams.get('view');
   const initialView = viewParam === 'flex_rules' ? 'flex_rules' : (viewParam === 'paid_broadcast' ? 'paid_broadcast' : '');
@@ -2749,7 +2611,7 @@ function renderHookteaAdminPage(env) {
     <section class="view" id="view-paid_broadcast"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/action-modules.html?view=paid_broadcast" style="width:100%;height:100%;border:0;display:block;background:#f8fafc"></iframe></section></section>
     <section class="view" id="view-flex_rules"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/action-modules.html?view=flex_rules" style="width:100%;height:100%;border:0;display:block;background:#f8fafc"></iframe></section></section>
     <section class="view" id="view-richmenu"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/menu.html?v=hooktea-port-20260703" style="width:100%;height:100%;border:0;display:block"></iframe></section></section>
-    <section class="view" id="view-audit"><section class="panel"><div class="panel-header"><div class="section-title">操作紀錄</div><span class="status-badge">Webhook 事件</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>類型</th><th>目前紀錄來源</th><th>狀態</th></tr></thead><tbody><tr><td>LINE 訊息</td><td>/api/admin/line-messages</td><td>已串接</td></tr><tr><td>母站轉送</td><td>/api/admin/webhooks</td><td>已串接</td></tr><tr><td>後台操作</td><td>audit_logs</td><td>待建立</td></tr></tbody></table></div></section></section>
+    <section class="view" id="view-audit"><section class="panel"><div class="panel-header"><div><div class="section-title">操作紀錄</div><div class="muted">後台操作、LINE 訊息與母站轉送紀錄</div></div><div><span class="muted" id="auditStatus"></span> <button class="btn-outline btn-small" id="refreshAudit">重新整理</button></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>類型</th><th>動作</th><th>操作者</th><th>目標</th><th>摘要</th></tr></thead><tbody id="auditRows"></tbody></table></div></section></section>
     <section class="view" id="view-shop_modules">
       <div class="shop-module-page">
         <section class="settings-card shop-module-head">
@@ -2839,7 +2701,7 @@ function renderHookteaAdminPage(env) {
     function setView(view){ qsa(".nav-item").forEach(btn => btn.classList.toggle("nav-active", btn.dataset.view === view)); qsa(".view").forEach(section => section.classList.toggle("active", section.id === "view-" + view)); const title = titles[view] || titles.dashboard; qs("#pageTitle").textContent = title[0]; qs("#pageSubtitle").textContent = title[1]; }
     on("#nav", "click", e => { const btn = e.target.closest(".nav-item"); if(btn) setView(btn.dataset.view); }); document.body.addEventListener("click", e => { const jump = e.target.closest("[data-jump]"); if(jump) setView(jump.dataset.jump); });
     function setLoginCover(show){ const cover = qs("#loginCover"); if(cover) cover.style.display = show ? "flex" : "none"; }
-    on("#saveToken", "click", () => { adminToken = qs("#adminToken").value.trim(); localStorage.setItem("gusys_admin_token", adminToken); setLoginCover(false); if(qs("#view-settings")?.classList.contains("active")){ saveSettings("settingsStatus"); } else { loadAll(); } }); on("#loginSubmit", "click", () => { adminToken = qs("#loginToken").value.trim(); qs("#adminToken").value = adminToken; localStorage.setItem("gusys_admin_token", adminToken); setLoginCover(false); loadAll(); }); on("#refreshAll", "click", () => loadAll());
+    on("#saveToken", "click", () => { adminToken = qs("#adminToken").value.trim(); localStorage.setItem("gusys_admin_token", adminToken); setLoginCover(false); if(qs("#view-settings")?.classList.contains("active")){ saveSettings("settingsStatus"); } else { loadAll(); } }); on("#loginSubmit", "click", () => { adminToken = qs("#loginToken").value.trim(); qs("#adminToken").value = adminToken; localStorage.setItem("gusys_admin_token", adminToken); setLoginCover(false); loadAll(); }); on("#refreshAll", "click", () => loadAll()); on("#refreshAudit", "click", loadAudit);
     on("#createSales", "click", async () => { try{ await api("/api/sales/reps",{method:"POST",body:JSON.stringify({name:qs("#salesName").value,phone:qs("#salesPhone").value,lineUserId:qs("#salesLine").value,salesCode:qs("#salesCode").value})}); qs("#salesStatus").textContent = "已建立"; await Promise.all([loadSales(),loadSummary()]); }catch(err){ qs("#salesStatus").textContent = err.message; } });
     on("#createProduct", "click", saveProductForm); on("#cancelProductEdit", "click", closeProductModal); on("#newProductBtn", "click", openNewProductModal); on("#productModalClose", "click", closeProductModal); on("#deleteProductBtn", "click", deleteProductForm); on("#productSearch", "input", renderProductRows); on("#uploadProductImage", "click", () => qs("#productImageFile")?.click()); on("#productImageFile", "change", handleProductImageUpload); on("#clearProductImage", "click", () => { qs("#productImage").value=""; const file=qs("#productImageFile"); if(file) file.value=""; updateProductImagePreview(); }); on("#orderSearch", "input", renderOrderRows); on("#orderTypeFilter", "change", renderOrderRows); on("#reloadOrders", "click", loadOrders); on("#orderModalClose", "click", closeOrderModal); on("#cancelOrderEdit", "click", closeOrderModal); on("#saveOrderEdit", "click", saveOrderUpdate);
     on("#runAi", "click", async () => { qs("#aiRunStatus").textContent = "分析中"; try{ await api("/api/ai-monitor/analyze",{method:"POST",body:JSON.stringify({limit:30})}); qs("#aiRunStatus").textContent = "完成"; await loadAi(); }catch(err){ qs("#aiRunStatus").textContent = err.message; } }); on("#loadReport", "click", () => loadReports()); on("#reloadSettings", "click", () => loadSettings()); on("#saveSettings", "click", () => saveSettings("settingsStatus")); on("#saveShopModules", "click", () => saveSettings("shopModuleStatus")); on("#customerSearch", "input", () => renderCustomers()); on("#pointsSearch", "input", () => renderPointMembers()); on("#refreshPoints", "click", () => loadSelectedPointLedger()); on("#crmClose", "click", closeCrmModal); on("#crmCancel", "click", closeCrmModal); on("#crmSave", "click", saveCustomerCrm); on("#syncProfiles", "click", syncProfiles); on("#grantPoints", "click", () => submitPointAdjust("earn")); on("#deductPoints", "click", () => submitPointAdjust("spend")); on("#reloadBroadcastData", "click", loadActionModules); on("#reloadBroadcastHistory", "click", loadActionModules); on("#saveBroadcastTag", "click", saveBroadcastTag); on("#sendBroadcast", "click", () => sendPaidBroadcast(false)); on("#sendBroadcastTest", "click", () => sendPaidBroadcast(true)); on("#broadcastMessage", "input", () => { const el=qs("#broadcastMessage"); const c=qs("#broadcastCharCount"); if(c&&el)c.textContent=el.value.length+" / 4900"; }); ["#broadcastTag","#broadcastTier","#broadcastKeyword","#broadcastMemberSearch"].forEach(sel => on(sel, "input", renderBroadcast)); on("#broadcastSelectAll", "change", e => { qsa("[data-broadcast-uid]").forEach(cb => cb.checked = e.target.checked); renderBroadcastCounts(); }); on("#broadcastClearSelection", "click", () => { qsa("[data-broadcast-uid]").forEach(cb => cb.checked = false); renderBroadcastCounts(); }); on("#saveReplyRule", "click", saveReplyRule); on("#cancelReplyRuleEdit", "click", () => setReplyRuleForm(null)); ["#flexRuleSearch","#flexRuleTypeFilter","#flexRuleStatusFilter"].forEach(sel => on(sel, "input", renderReplyRules));
@@ -2889,7 +2751,7 @@ function renderHookteaAdminPage(env) {
     async function loadOrders(){ const status=qs("#orderStatus"); if(status) status.textContent="讀取中"; try{ adminOrders=await api("/api/admin/orders"); renderOrderRows(); if(status) status.textContent="已載入 "+money(adminOrders.length)+" 筆"; }catch(err){ if(status) status.textContent=err.message; } }
     async function loadProducts(){ adminProducts = await api("/api/products"); renderProductRows(); }    async function loadMessages(){ const rows = await api("/api/admin/line-messages"); const html = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); qs("#messageRows").innerHTML = html; qs("#dashboardMessages").innerHTML = rows.slice(0,6).map(r => '<tr><td>'+esc(r.createdAt)+'</td><td class="mono">'+esc(r.senderId)+'</td><td class="summary-text">'+esc(r.messageText)+'</td><td class="mono">'+esc(r.threadId)+'</td></tr>').join("") || tableEmpty(4,"尚無訊息"); }
     async function loadWebhooks(){ const rows = await api("/api/admin/webhooks"); qs("#webhookRows").innerHTML = rows.map(r => { const s = r.summary || {}; const tone = s.invalidSignature ? "danger" : (s.hasReplyPayload ? "" : "warn"); const label = s.invalidSignature ? "簽章錯誤" : (s.hasReplyPayload ? "有回覆" : "已轉送"); const detail = s.contentType || "無 content-type"; return '<tr><td>'+esc(r.createdAt)+'</td><td>'+esc(r.source)+'</td><td class="summary-text">'+esc(r.messageText||"")+'</td><td>'+esc(r.motherStatus||"")+'</td><td>'+badge(label,tone)+'<div class="muted">'+esc(detail)+'</div></td></tr>'; }).join("") || tableEmpty(5,"尚無紀錄"); }
-    async function loadAi(){ const rows = await api("/api/ai-monitor/insights?limit=100"); qs("#aiRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td>'+badge(r.riskLevel||"-", r.riskLevel === "high" ? "danger" : (r.riskLevel === "medium" ? "warn" : ""))+'</td><td>'+esc(r.category||"")+'</td><td class="summary-text">'+esc(r.summary||"")+'</td><td class="summary-text">'+esc(r.recommendedAction||"")+'</td></tr>').join("") || tableEmpty(5,"尚無 AI 洞察"); }
+    async function loadAudit(){ const status=qs("#auditStatus"); if(status) status.textContent="讀取中"; try{ const rows=await api("/api/admin/audit-logs"); qs("#auditRows").innerHTML=rows.map(r=>'<tr><td>'+esc(r.createdAt||"")+'</td><td>'+badge(r.type||"紀錄",r.type==="後台操作"?"":"warn")+'</td><td class="mono">'+esc(r.action||"")+'</td><td class="mono">'+esc(r.actor||"")+'</td><td class="summary-text">'+esc(r.target||"")+'</td><td class="summary-text">'+esc(r.summary||"")+'</td></tr>').join("") || tableEmpty(6,"尚無操作紀錄"); if(status) status.textContent="已載入 "+money(rows.length)+" 筆"; }catch(err){ if(status) status.textContent=err.message; } }    async function loadAi(){ const rows = await api("/api/ai-monitor/insights?limit=100"); qs("#aiRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.createdAt)+'</td><td>'+badge(r.riskLevel||"-", r.riskLevel === "high" ? "danger" : (r.riskLevel === "medium" ? "warn" : ""))+'</td><td>'+esc(r.category||"")+'</td><td class="summary-text">'+esc(r.summary||"")+'</td><td class="summary-text">'+esc(r.recommendedAction||"")+'</td></tr>').join("") || tableEmpty(5,"尚無 AI 洞察"); }
     function memberTags(m){ return Array.isArray(m.broadcastTags) ? m.broadcastTags : []; }
     function broadcastAudienceRows(){ const tag=(qs("#broadcastTag")?.value||"").trim(); const tier=(qs("#broadcastTier")?.value||"").trim(); const keyword=(qs("#broadcastKeyword")?.value||"").trim().toLowerCase(); return (broadcastData.members||[]).filter(m => { if(tag && !memberTags(m).includes(tag)) return false; if(tier && String(m.memberTier||"")!==tier) return false; if(keyword){ const hay=[m.name,m.phone,m.address,m.userId,m.memberTier].join(" ").toLowerCase(); if(!hay.includes(keyword)) return false; } return true; }); }
     function renderBroadcast(){ const tags=broadcastData.tags||[]; const members=broadcastData.members||[]; const tagOptions='<option value="">全部標籤</option>'+tags.map(t=>'<option value="'+esc(t.name)+'">'+esc(t.name)+'</option>').join(""); const oldTag=qs("#broadcastTag")?.value||""; if(qs("#broadcastTag")){ qs("#broadcastTag").innerHTML=tagOptions; qs("#broadcastTag").value=oldTag; } const oldSelected=qs("#selectedBroadcastTag")?.value||""; if(qs("#selectedBroadcastTag")){ qs("#selectedBroadcastTag").innerHTML=tags.map(t=>'<option value="'+esc(t.name)+'">'+esc(t.name)+'</option>').join("")||'<option value="">請先建立標籤</option>'; qs("#selectedBroadcastTag").value=oldSelected || (tags[0]?.name||""); } const tiers=[...new Set(members.map(m=>String(m.memberTier||"").trim()).filter(Boolean))]; const oldTier=qs("#broadcastTier")?.value||""; if(qs("#broadcastTier")){ qs("#broadcastTier").innerHTML='<option value="">全部等級</option>'+tiers.map(t=>'<option value="'+esc(t)+'">'+esc(t)+'</option>').join(""); qs("#broadcastTier").value=oldTier; } qs("#broadcastTagChips").innerHTML=tags.map(t=>'<button class="btn-outline btn-small" data-select-tag="'+esc(t.name)+'">'+esc(t.name)+' <span class="muted">'+money(members.filter(m=>memberTags(m).includes(t.name)).length)+'</span></button>').join("") || '<span class="muted">尚未建立標籤</span>'; qsa("[data-select-tag]").forEach(btn=>btn.onclick=()=>{ qs("#selectedBroadcastTag").value=btn.dataset.selectTag; renderBroadcast(); }); const moduleCount=(broadcastData.modules||[]).filter(m=>m.active!==false).length; qs("#broadcastModuleOptions").innerHTML=(broadcastData.modules||[]).filter(m=>m.active!==false).map(m=>'<label class="ops-item" style="display:flex;gap:10px;align-items:flex-start;margin:0"><input type="checkbox" data-broadcast-module="'+esc(m.id)+'"><span><strong>'+esc(m.moduleName||m.keyword||m.id)+'</strong><div class="muted">'+esc(m.replyType)+(m.keyword?' · '+esc(m.keyword):'')+'</div></span></label>').join("") || '<div class="empty">尚未建立可推播模組，請到「機器人與專區卡片」新增。</div>'; renderBroadcastAudience(); renderBroadcastMembers(); renderBroadcastCampaigns(); qs("#broadcastHistoryCount").textContent=money((broadcastData.campaigns||[]).length); }
@@ -2918,7 +2780,7 @@ function renderHookteaAdminPage(env) {
     settingFields().forEach(el => el.addEventListener("input", () => { const key = el.dataset.setting; settingFields().forEach(other => { if(other !== el && other.dataset.setting === key) other.value = el.value; }); hookteaSettings = collectSettings(); renderSettingsPreview(); renderLiffLinks(); }));
     async function loadSettings(){ const status = qs("#settingsStatus"); const shopStatus = qs("#shopModuleStatus"); if(status) status.textContent="讀取中"; if(shopStatus) shopStatus.textContent="讀取中"; try{ const data=await api("/api/admin/settings"); fillSettings(data.settings||{}); const label=data.updatedAt?"已載入 "+data.updatedAt:"已載入預設值"; if(status) status.textContent=label; if(shopStatus) shopStatus.textContent=label; }catch(err){ if(status) status.textContent=err.message; if(shopStatus) shopStatus.textContent=err.message; } }
     async function saveSettings(statusId){ const target = qs("#"+(statusId||"settingsStatus")); if(target) target.textContent="儲存中"; try{ const saved=await api("/api/admin/settings",{method:"POST",body:JSON.stringify({settings:collectSettings()})}); fillSettings(saved.settings||{}); if(target) target.textContent="設定已儲存"; }catch(err){ if(target) target.textContent=err.message; } }    async function loadReports(){ const period = qs("#reportPeriod").value || new Date().toISOString().slice(0,7); qs("#reportPeriod").value = period; const rows = await api("/api/reports/monthly-sales?period=" + encodeURIComponent(period)); qs("#reportRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.salesName||"-")+'</td><td class="mono">'+esc(r.salesCode||"")+'</td><td>'+money(r.orderCount)+'</td><td>'+money(r.revenue)+'</td><td>'+money(r.grossProfit)+'</td></tr>').join("") || tableEmpty(5,"尚無業績資料"); }
-    async function loadAll(){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadOrders(),loadMessages(),loadWebhooks(),loadAi(),loadReports(),loadSettings()]); }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } } }
+    async function loadAll(){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadOrders(),loadMessages(),loadWebhooks(),loadAudit(),loadAi(),loadReports(),loadSettings()]); }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } } }
     setView("dashboard"); loadAll();
   </script>
 </body>
