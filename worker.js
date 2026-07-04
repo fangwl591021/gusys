@@ -2250,7 +2250,7 @@ async function monthlySalesReport(request, env) {
 async function renderSalesInvitePage(request, env) {
   const url = new URL(request.url);
   const salesCode = normalizeSalesCode(url.searchParams.get("sales") || url.searchParams.get("ref") || "");
-  const motherUrl = env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || "https://aiwe.cc/index.php/line_login/10279/";
+  const motherUrl = buildSalesInviteUrl(env, salesCode);
   return new Response(`<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -2460,11 +2460,23 @@ async function recordWebhookDebug(env, key, value) {
   await env.GUSYS_KV.put(key, JSON.stringify(value), { expirationTtl: 86400 * 7 }).catch(() => {});
 }
 
+function workerPublicBase(env) {
+  return String(env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev").replace(/\/+$/, "");
+}
+
+function motherMemberBaseUrl(env) {
+  return String(env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || env.MOTHER_WEBHOOK_URL || "https://aiwe.cc/index.php/line_login/10279/").trim();
+}
+
 function buildSalesInviteUrl(env, salesCode) {
-  const workerBase = String(env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev").replace(/\/+$/, "");
-  const url = new URL(`${workerBase}/sales/invite`);
-  url.searchParams.set("sales", salesCode);
+  const url = new URL(motherMemberBaseUrl(env));
+  const code = normalizeSalesCode(salesCode || "");
+  if (code) url.searchParams.set("sales", code);
   url.searchParams.set("source", "sales_qr");
+  const bindUrl = new URL(`${workerPublicBase(env)}/api/sales/bind`);
+  if (code) bindUrl.searchParams.set("sales", code);
+  bindUrl.searchParams.set("source", "mother_site");
+  url.searchParams.set("gusys_bind", bindUrl.toString());
   return url.toString();
 }
 
