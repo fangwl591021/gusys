@@ -2,6 +2,15 @@
 
 Gusys is a Cloudflare Worker starter for a distributor LINE Official Account.
 
+## Development governance
+
+Gusys uses `fangwl591021/aiwe-dev-system` as the shared rules and workflow source. It is not a runtime dependency and should not replace this Worker.
+
+Project-specific governance:
+
+- [Gusys AIWE Dev System Rules](docs/GUSYS_AIWE_DEV_SYSTEM_RULES.md)
+- [Porting Checklist](docs/PORTING_CHECKLIST.md)
+
 Core hierarchy:
 
 ```text
