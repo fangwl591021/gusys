@@ -1,3 +1,5 @@
+import { renderSmartMenuStudioReplicaPage } from "./smart-menu-replica.js";
+
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
@@ -20,7 +22,7 @@ export default {
     try {
       if (url.pathname === "/" && request.method === "POST") return handleHookteaMenuAction(request, env);
       if (url.pathname === "/action" && request.method === "POST") return handleHookteaMenuAction(request, env);
-      if (url.pathname === "/menu.html" || url.pathname === "/smart-menu.html") return renderSmartMenuStudioPage(request);
+      if (url.pathname === "/menu.html" || url.pathname === "/smart-menu.html") return renderSmartMenuStudioReplicaPage(request);
       if (url.pathname === "/") return renderHome(env);
       if (url.pathname === "/admin") return renderHookteaAdminPage(env);
       if (url.pathname === "/action-modules.html") return renderActionModulesPage(request);
@@ -4787,7 +4789,7 @@ function renderHookteaAdminPage(env) {
     <section class="view" id="view-webhooks"><section class="panel"><div class="panel-header"><div class="section-title">雙 Webhook 轉送狀態</div><span class="muted">LINE OA -> Gusys Worker -> 母站</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>來源</th><th>訊息</th><th>母站狀態</th><th>摘要</th></tr></thead><tbody id="webhookRows"></tbody></table></div></section></section>
     <section class="view" id="view-paid_broadcast"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/action-modules.html?view=paid_broadcast" style="width:100%;height:100%;border:0;display:block;background:#f8fafc"></iframe></section></section>
     <section class="view" id="view-flex_rules"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/action-modules.html?view=flex_rules" style="width:100%;height:100%;border:0;display:block;background:#f8fafc"></iframe></section></section>
-    <section class="view" id="view-richmenu"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/smart-menu.html?embed=1&v=smart-menu-studio-20260828" style="width:100%;height:100%;border:0;display:block"></iframe></section></section>
+    <section class="view" id="view-richmenu"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/smart-menu.html?embed=1&v=smart-menu-studio-replica-20260828" style="width:100%;height:100%;border:0;display:block"></iframe></section></section>
     <section class="view" id="view-audit"><section class="panel"><div class="panel-header"><div><div class="section-title">操作紀錄</div><div class="muted">後台操作、LINE 訊息與母站轉送紀錄</div></div><div><span class="muted" id="auditStatus"></span> <button class="btn-outline btn-small" id="refreshAudit">重新整理</button></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>類型</th><th>動作</th><th>操作者</th><th>目標</th><th>摘要</th></tr></thead><tbody id="auditRows"></tbody></table></div></section></section>
     <section class="view" id="view-shop_modules">
       <div class="shop-module-page">
