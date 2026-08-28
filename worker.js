@@ -3863,15 +3863,17 @@ function smartMenuPublicTemplate(row) {
 function normalizeSmartMenuArea(area, index, projectId) {
   const action = normalizeSmartMenuAction(area.action || area);
   const safeIndex = Math.max(0, Math.floor(toNum(area.areaIndex ?? area.area_index ?? index, index)));
+  const x = Math.max(0, Math.min(2499, Math.round(toNum(area.x, 0))));
+  const y = Math.max(0, Math.min(1685, Math.round(toNum(area.y, 0))));
   return {
     id: String(area.id || smartMenuId("area")).trim(),
     projectId,
     areaIndex: safeIndex,
     label: String(area.label || `區塊 ${safeIndex + 1}`).trim().slice(0, 80),
-    x: Math.max(0, Math.round(toNum(area.x, 0))),
-    y: Math.max(0, Math.round(toNum(area.y, 0))),
-    width: Math.max(1, Math.round(toNum(area.width, 1))),
-    height: Math.max(1, Math.round(toNum(area.height, 1))),
+    x,
+    y,
+    width: Math.max(1, Math.min(2500 - x, Math.round(toNum(area.width, 1)))),
+    height: Math.max(1, Math.min(1686 - y, Math.round(toNum(area.height, 1)))),
     action,
   };
 }
@@ -3879,15 +3881,17 @@ function normalizeSmartMenuArea(area, index, projectId) {
 function normalizeSmartMenuTemplateArea(area, index, templateId) {
   const action = normalizeSmartMenuAction(area.action || area);
   const safeIndex = Math.max(0, Math.floor(toNum(area.areaIndex ?? area.area_index ?? index, index)));
+  const x = Math.max(0, Math.min(2499, Math.round(toNum(area.x, 0))));
+  const y = Math.max(0, Math.min(1685, Math.round(toNum(area.y, 0))));
   return {
     id: String(area.id || smartMenuId("tarea")).trim(),
     templateId,
     areaIndex: safeIndex,
     label: String(area.label || `區塊 ${safeIndex + 1}`).trim().slice(0, 80),
-    x: Math.max(0, Math.round(toNum(area.x, 0))),
-    y: Math.max(0, Math.round(toNum(area.y, 0))),
-    width: Math.max(1, Math.round(toNum(area.width, 1))),
-    height: Math.max(1, Math.round(toNum(area.height, 1))),
+    x,
+    y,
+    width: Math.max(1, Math.min(2500 - x, Math.round(toNum(area.width, 1)))),
+    height: Math.max(1, Math.min(1686 - y, Math.round(toNum(area.height, 1)))),
     action,
   };
 }
@@ -3933,7 +3937,28 @@ function parseSmartMenuAiJson(text) {
 }
 
 function normalizeDetectedSmartMenuAreas(areas) {
-  return (Array.isArray(areas) && areas.length ? areas : defaultSmartMenuAreas()).slice(0, 20).map((area, index) => {
+  const detected = (Array.isArray(areas) && areas.length ? areas : defaultSmartMenuAreas())
+    .slice(0, 20)
+    .map(area => {
+      const box = Array.isArray(area?.box_2d) ? area.box_2d.map(value => toNum(value, 0)) : null;
+      if (!box || box.length !== 4) return area;
+      const ymin = Math.max(0, Math.min(1000, box[0]));
+      const xmin = Math.max(0, Math.min(1000, box[1]));
+      const ymax = Math.max(ymin + 1, Math.min(1000, box[2]));
+      const xmax = Math.max(xmin + 1, Math.min(1000, box[3]));
+      return {
+        ...area,
+        x: Math.round((xmin / 1000) * 2500),
+        y: Math.round((ymin / 1000) * 1686),
+        width: Math.round(((xmax - xmin) / 1000) * 2500),
+        height: Math.round(((ymax - ymin) / 1000) * 1686),
+      };
+    })
+    .sort((left, right) => {
+      const rowDelta = toNum(left.y, 0) - toNum(right.y, 0);
+      return Math.abs(rowDelta) <= 40 ? toNum(left.x, 0) - toNum(right.x, 0) : rowDelta;
+    });
+  return detected.map((area, index) => {
     const normalized = normalizeSmartMenuTemplateArea({
       ...area,
       action: area.action || {
@@ -4099,10 +4124,12 @@ async function analyzeSmartMenuImage(request, env) {
     });
   }
   const prompt = [
-    "你是 LINE 官方帳號 Rich Menu 專業座標分析器。",
-    "請分析圖片中的可點擊功能區塊。整張圖片固定換算為 2500x1686，左上角為 0,0。",
-    "回傳 JSON，格式只能是 {\"areas\":[{\"label\":\"\",\"x\":0,\"y\":0,\"width\":0,\"height\":0,\"action\":{\"type\":\"message\",\"text\":\"\"}}],\"notes\":[] }。",
-    "座標需為整數，區塊不得超界。label 使用繁體中文。action 優先使用 message，若明顯是外部網址才用 uri。",
+    "你是 LINE 官方帳號 Rich Menu 的按鈕邊界偵測器。",
+    "只辨識看起來可點擊且有完整視覺邊界的按鈕或卡片；不要把品牌、標題、說明文字、人物、插圖、背景裝飾或整組按鈕列當成熱區。",
+    "每個可點擊按鈕只能有一個框，框必須緊貼該按鈕的外框，彼此不得重疊，也不可用一個大框包住多個按鈕。",
+    "box_2d 使用 [ymin, xmin, ymax, xmax]，每個值是相對整張圖片的 0 到 1000 整數；不要自行換算成像素。",
+    "回傳 JSON，格式只能是 {\"areas\":[{\"label\":\"繁體中文\",\"box_2d\":[0,0,1000,1000],\"action\":{\"type\":\"message\",\"text\":\"\"}}],\"notes\":[] }。",
+    "action 預設使用 message，text 使用按鈕上可辨識的完整文字；只有明確顯示網址時才使用 uri。",
     "不要輸出 Markdown，不要輸出 JSON 以外內容。",
   ].join("\n");
   const model = config.model;
@@ -4128,10 +4155,12 @@ async function analyzeSmartMenuImage(request, env) {
                   type: "object",
                   properties: {
                     label: { type: "string" },
-                    x: { type: "integer", minimum: 0, maximum: 2499 },
-                    y: { type: "integer", minimum: 0, maximum: 1685 },
-                    width: { type: "integer", minimum: 1, maximum: 2500 },
-                    height: { type: "integer", minimum: 1, maximum: 1686 },
+                    box_2d: {
+                      type: "array",
+                      minItems: 4,
+                      maxItems: 4,
+                      items: { type: "integer", minimum: 0, maximum: 1000 },
+                    },
                     action: {
                       type: "object",
                       properties: {
@@ -4143,7 +4172,7 @@ async function analyzeSmartMenuImage(request, env) {
                       required: ["type"],
                     },
                   },
-                  required: ["label", "x", "y", "width", "height", "action"],
+                  required: ["label", "box_2d", "action"],
                 },
               },
               notes: { type: "array", items: { type: "string" } },
