@@ -75,6 +75,7 @@ export default {
       if (url.pathname === "/api/admin/rich-menus/deploy" && request.method === "POST") return deployRichMenu(request, env);
       if (url.pathname.startsWith("/api/admin/smart-menu/assets/") && request.method === "GET") return getSmartMenuAsset(request, env, decodeURIComponent(url.pathname.slice("/api/admin/smart-menu/assets/".length)));
       if (url.pathname === "/api/admin/smart-menu/analyze-image" && request.method === "POST") return analyzeSmartMenuImage(request, env);
+      if (url.pathname === "/api/admin/smart-menu/ai-usage/summary" && request.method === "GET") return getSmartMenuAiUsageSummary(request, env);
       if (url.pathname === "/api/admin/smart-menu/templates/upload-image" && request.method === "POST") return uploadSmartMenuTemplateImage(request, env);
       if (url.pathname === "/api/admin/smart-menu/templates" && request.method === "GET") return listSmartMenuTemplates(request, env);
       if (url.pathname === "/api/admin/smart-menu/templates" && request.method === "POST") return createSmartMenuTemplate(request, env);
@@ -3729,14 +3730,138 @@ function normalizeDetectedSmartMenuAreas(areas) {
   });
 }
 
+function smartMenuAiUsage(body = {}) {
+  const usage = body && typeof body.usage === "object" ? body.usage : {};
+  const inputTokens = Math.max(0, Math.round(toNum(usage.input_tokens, 0)));
+  const outputTokens = Math.max(0, Math.round(toNum(usage.output_tokens, 0)));
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: Math.max(inputTokens + outputTokens, Math.round(toNum(usage.total_tokens, inputTokens + outputTokens))),
+    cachedInputTokens: Math.max(0, Math.round(toNum(usage.input_tokens_details?.cached_tokens, 0))),
+    reasoningTokens: Math.max(0, Math.round(toNum(usage.output_tokens_details?.reasoning_tokens, 0))),
+  };
+}
+
+async function recordSmartMenuAiUsage(env, input) {
+  const usage = smartMenuAiUsage(input.body);
+  await env.DB.prepare(`
+    INSERT INTO ai_usage_ledger (
+      id, workspace_id, user_id, feature_code, operation_code, provider, model,
+      provider_request_id, status, input_tokens, output_tokens, total_tokens,
+      cached_input_tokens, reasoning_tokens, provider_cost_micros,
+      billable_cost_micros, currency, latency_ms, error_code, created_at
+    ) VALUES (?, ?, ?, 'rich_menu_image_analysis', 'detect_layout', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'USD', ?, ?, datetime('now'))
+  `).bind(
+    smartMenuId("ai_usage"),
+    smartMenuWorkspaceId(),
+    "gusys-admin",
+    String(input.provider || "openai"),
+    String(input.model || ""),
+    String(input.body?.id || ""),
+    String(input.status || "success"),
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.totalTokens,
+    usage.cachedInputTokens,
+    usage.reasoningTokens,
+    Math.max(0, Math.round(toNum(input.latencyMs, 0))),
+    String(input.errorCode || "").slice(0, 180),
+  ).run();
+}
+
+function normalizeSmartMenuUsageRow(row = {}) {
+  return {
+    ...row,
+    requests: Math.max(0, Math.round(toNum(row.requests, 0))),
+    input_tokens: Math.max(0, Math.round(toNum(row.input_tokens, 0))),
+    output_tokens: Math.max(0, Math.round(toNum(row.output_tokens, 0))),
+    total_tokens: Math.max(0, Math.round(toNum(row.total_tokens, 0))),
+    provider_cost_micros: Math.max(0, Math.round(toNum(row.provider_cost_micros, 0))),
+    billable_cost_micros: Math.max(0, Math.round(toNum(row.billable_cost_micros, 0))),
+    estimated_margin_micros: Math.round(toNum(row.estimated_margin_micros, 0)),
+  };
+}
+
+async function getSmartMenuAiUsageSummary(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const now = new Date();
+  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const workspaceId = smartMenuWorkspaceId();
+  const aggregate = `
+    COUNT(*) AS requests,
+    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+    COALESCE(SUM(provider_cost_micros), 0) AS provider_cost_micros,
+    COALESCE(SUM(billable_cost_micros), 0) AS billable_cost_micros,
+    COALESCE(SUM(billable_cost_micros - provider_cost_micros), 0) AS estimated_margin_micros
+  `;
+  const baseBindings = [workspaceId, from.toISOString(), to.toISOString()];
+  const totalRow = await env.DB.prepare(`
+    SELECT ${aggregate}
+    FROM ai_usage_ledger
+    WHERE workspace_id = ? AND datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+  `).bind(...baseBindings).first();
+  const byFeature = await env.DB.prepare(`
+    SELECT feature_code AS featureCode, ${aggregate}
+    FROM ai_usage_ledger
+    WHERE workspace_id = ? AND datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+    GROUP BY feature_code ORDER BY total_tokens DESC
+  `).bind(...baseBindings).all();
+  const byModel = await env.DB.prepare(`
+    SELECT provider, model, ${aggregate}
+    FROM ai_usage_ledger
+    WHERE workspace_id = ? AND datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+    GROUP BY provider, model ORDER BY total_tokens DESC
+  `).bind(...baseBindings).all();
+  const byUser = await env.DB.prepare(`
+    SELECT user_id AS userId, ${aggregate}
+    FROM ai_usage_ledger
+    WHERE workspace_id = ? AND datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
+    GROUP BY user_id ORDER BY total_tokens DESC
+  `).bind(...baseBindings).all();
+  const total = normalizeSmartMenuUsageRow(totalRow || {});
+  return json({
+    ok: true,
+    success: true,
+    summary: {
+      period: { from: from.toISOString(), to: to.toISOString() },
+      scope: "workspace",
+      total: {
+        requests: total.requests,
+        inputTokens: total.input_tokens,
+        outputTokens: total.output_tokens,
+        totalTokens: total.total_tokens,
+        providerCostMicros: total.provider_cost_micros,
+        billableCostMicros: total.billable_cost_micros,
+        estimatedMarginMicros: total.estimated_margin_micros,
+      },
+      byFeature: (byFeature.results || []).map(normalizeSmartMenuUsageRow),
+      byUser: (byUser.results || []).map(row => ({ ...normalizeSmartMenuUsageRow(row), userName: row.userId === "gusys-admin" ? "Gusys Admin" : row.userId || "未知使用者" })),
+      byModel: (byModel.results || []).map(normalizeSmartMenuUsageRow),
+    },
+  });
+}
+
 async function analyzeSmartMenuImage(request, env) {
   requireAdmin(request, env);
   requireDb(env);
+  const startedAt = Date.now();
   const payload = await request.json().catch(() => ({}));
   const imageDataUrl = String(payload.imageDataUrl || payload.image || "").trim();
   const image = parseDataUrlImage(imageDataUrl);
   if (!image) return json({ ok: false, success: false, error: "請先上傳 JPG 或 PNG 圖文選單底圖。" }, 400);
   if (!String(env.OPENAI_API_KEY || "").trim()) {
+    await recordSmartMenuAiUsage(env, {
+      provider: "fallback",
+      model: "",
+      status: "fallback",
+      latencyMs: Date.now() - startedAt,
+      errorCode: "OPENAI_API_KEY_NOT_CONFIGURED",
+    }).catch(() => {});
     return json({
       ok: true,
       success: true,
@@ -3773,7 +3898,24 @@ async function analyzeSmartMenuImage(request, env) {
     }),
   });
   const body = await aiRes.json().catch(() => ({}));
-  if (!aiRes.ok) return json({ ok: false, success: false, error: body?.error?.message || "AI 圖片分析失敗" }, 500);
+  if (!aiRes.ok) {
+    await recordSmartMenuAiUsage(env, {
+      provider: "openai",
+      model,
+      status: "failed",
+      body,
+      latencyMs: Date.now() - startedAt,
+      errorCode: body?.error?.code || `HTTP_${aiRes.status}`,
+    }).catch(() => {});
+    return json({ ok: false, success: false, error: body?.error?.message || "AI 圖片分析失敗" }, 500);
+  }
+  await recordSmartMenuAiUsage(env, {
+    provider: "openai",
+    model,
+    status: "success",
+    body,
+    latencyMs: Date.now() - startedAt,
+  }).catch(() => {});
   const parsed = parseSmartMenuAiJson(extractSmartMenuAiText(body));
   return json({
     ok: true,
