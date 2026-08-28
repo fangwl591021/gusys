@@ -41,6 +41,10 @@ export default {
       if (url.pathname === "/api/admin/line-messages" && request.method === "GET") return listAdminLineMessages(request, env);
       if (url.pathname === "/api/admin/settings" && request.method === "GET") return getAdminSettings(request, env);
       if (url.pathname === "/api/admin/settings" && request.method === "POST") return saveAdminSettings(request, env);
+      if (url.pathname === "/api/admin/ai-provider" && request.method === "GET") return await getAdminAiProvider(request, env);
+      if (url.pathname === "/api/admin/ai-provider" && request.method === "POST") return await saveAdminAiProvider(request, env);
+      if (url.pathname === "/api/admin/ai-provider" && request.method === "DELETE") return await deleteAdminAiProvider(request, env);
+      if (url.pathname === "/api/admin/ai-provider/test" && request.method === "POST") return await testAdminAiProvider(request, env);
       if (url.pathname === "/api/admin/broadcast-data" && request.method === "GET") return getBroadcastData(request, env);
       if (url.pathname === "/api/admin/broadcast-tags" && request.method === "POST") return saveBroadcastTag(request, env);
       if (url.pathname === "/api/admin/broadcast-tags/member" && request.method === "POST") return tagBroadcastMember(request, env);
@@ -66,7 +70,7 @@ export default {
       if (url.pathname === "/api/members/check-or-create" && request.method === "POST") return checkOrCreateMember(request, env);
       if (url.pathname === "/api/points/adjust" && request.method === "POST") return adjustMemberPoints(request, env);
       if (url.pathname === "/api/points/list" && request.method === "GET") return listMemberPoints(request, env);
-      if (url.pathname === "/api/ai-monitor/analyze" && request.method === "POST") return analyzeLineMonitor(request, env);
+      if (url.pathname === "/api/ai-monitor/analyze" && request.method === "POST") return await analyzeLineMonitor(request, env);
       if (url.pathname === "/api/ai-monitor/insights" && request.method === "GET") return listAiMonitorInsights(request, env);
       if (url.pathname === "/api/admin/smart-monitor" && request.method === "GET") return listSmartMonitor(request, env);
       if (url.pathname === "/api/admin/rich-menus" && request.method === "GET") return listRichMenus(request, env);
@@ -74,7 +78,7 @@ export default {
       if (url.pathname === "/api/admin/rich-menus" && request.method === "DELETE") return deleteRichMenu(request, env);
       if (url.pathname === "/api/admin/rich-menus/deploy" && request.method === "POST") return deployRichMenu(request, env);
       if (url.pathname.startsWith("/api/admin/smart-menu/assets/") && request.method === "GET") return getSmartMenuAsset(request, env, decodeURIComponent(url.pathname.slice("/api/admin/smart-menu/assets/".length)));
-      if (url.pathname === "/api/admin/smart-menu/analyze-image" && request.method === "POST") return analyzeSmartMenuImage(request, env);
+      if (url.pathname === "/api/admin/smart-menu/analyze-image" && request.method === "POST") return await analyzeSmartMenuImage(request, env);
       if (url.pathname === "/api/admin/smart-menu/ai-usage/summary" && request.method === "GET") return getSmartMenuAiUsageSummary(request, env);
       if (url.pathname === "/api/admin/smart-menu/templates/upload-image" && request.method === "POST") return uploadSmartMenuTemplateImage(request, env);
       if (url.pathname === "/api/admin/smart-menu/templates" && request.method === "GET") return listSmartMenuTemplates(request, env);
@@ -88,13 +92,15 @@ export default {
 
       return json({ ok: false, error: "not_found", path: url.pathname }, 404);
     } catch (error) {
+      const status = error instanceof HttpError ? error.status : 500;
+      const code = error instanceof HttpError ? String(error.message || "request_failed") : "internal_error";
       console.error(JSON.stringify({
         level: "error",
         message: "request_failed",
         path: url.pathname,
         error: error && error.stack ? error.stack : String(error),
       }));
-      return json({ ok: false, error: "internal_error", message: String(error?.message || error) }, 500);
+      return json({ ok: false, error: code, message: String(error?.message || error) }, status);
     }
   },
 };
@@ -734,6 +740,217 @@ async function saveAdminSettings(request, env) {
       updated_at = excluded.updated_at
   `).bind(JSON.stringify(settings)).run();
   return json({ ok: true, data: { settings } });
+}
+
+const GEMINI_CONFIG_KEY = "gemini_api_config";
+const DEFAULT_GEMINI_MODEL = "gemini-3.7-flash";
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(String(value || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+async function importSettingsEncryptionKey(env) {
+  const secret = String(env.SETTINGS_ENCRYPTION_KEY || "").trim();
+  if (!secret) throw new HttpError(503, "settings_encryption_key_missing");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function encryptSettingSecret(env, value) {
+  const key = await importSettingsEncryptionKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(String(value || "")),
+  );
+  return {
+    version: 1,
+    algorithm: "AES-GCM",
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+  };
+}
+
+async function decryptSettingSecret(env, encrypted) {
+  if (!encrypted?.iv || !encrypted?.ciphertext) return "";
+  const key = await importSettingsEncryptionKey(env);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(encrypted.iv) },
+    key,
+    base64ToBytes(encrypted.ciphertext),
+  );
+  return new TextDecoder().decode(plaintext);
+}
+
+function normalizeGeminiModel(value) {
+  const model = String(value || DEFAULT_GEMINI_MODEL).trim();
+  if (!/^[a-zA-Z0-9._-]{3,100}$/.test(model)) throw new HttpError(400, "invalid_gemini_model");
+  return model;
+}
+
+function maskApiKey(value) {
+  const key = String(value || "").trim();
+  if (!key) return "";
+  if (key.length <= 8) return "********";
+  return `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
+
+async function readGeminiConfigRow(env) {
+  return env.DB.prepare(`
+    SELECT value_json AS valueJson, updated_at AS updatedAt
+    FROM system_settings
+    WHERE key = ?
+    LIMIT 1
+  `).bind(GEMINI_CONFIG_KEY).first().catch(error => {
+    if (String(error?.message || error).includes("no such table")) return null;
+    throw error;
+  });
+}
+
+async function resolveGeminiConfig(env) {
+  const row = await readGeminiConfigRow(env);
+  const saved = parseJson(row?.valueJson || "{}", {});
+  let apiKey = "";
+  let source = "";
+  let configurationError = "";
+  if (saved.encrypted?.ciphertext) {
+    try {
+      apiKey = await decryptSettingSecret(env, saved.encrypted);
+      source = "admin_encrypted";
+    } catch (error) {
+      configurationError = String(error?.message || error);
+    }
+  }
+  if (!apiKey && String(env.GEMINI_API_KEY || "").trim()) {
+    apiKey = String(env.GEMINI_API_KEY).trim();
+    source = "worker_secret";
+    configurationError = "";
+  }
+  return {
+    apiKey,
+    model: normalizeGeminiModel(saved.model || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL),
+    source,
+    updatedAt: row?.updatedAt || "",
+    configurationError,
+  };
+}
+
+function publicGeminiConfig(config) {
+  return {
+    provider: "gemini",
+    configured: Boolean(config.apiKey),
+    model: config.model,
+    source: config.source,
+    maskedKey: maskApiKey(config.apiKey),
+    updatedAt: config.updatedAt || "",
+    configurationError: config.configurationError || "",
+  };
+}
+
+async function getAdminAiProvider(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  return json({ ok: true, data: publicGeminiConfig(await resolveGeminiConfig(env)) });
+}
+
+async function saveAdminAiProvider(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const model = normalizeGeminiModel(payload.model);
+  const apiKey = String(payload.apiKey || "").trim();
+  const currentRow = await readGeminiConfigRow(env);
+  const current = parseJson(currentRow?.valueJson || "{}", {});
+  const encrypted = apiKey ? await encryptSettingSecret(env, apiKey) : current.encrypted;
+  if (!encrypted && !String(env.GEMINI_API_KEY || "").trim()) {
+    throw new HttpError(400, "gemini_api_key_required");
+  }
+  await env.DB.prepare(`
+    INSERT INTO system_settings (key, value_json, updated_by, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET
+      value_json = excluded.value_json,
+      updated_by = excluded.updated_by,
+      updated_at = excluded.updated_at
+  `).bind(GEMINI_CONFIG_KEY, JSON.stringify({ provider: "gemini", model, encrypted }), auditActor(request)).run();
+  await writeAudit(request, env, "save_ai_provider", "system_setting", GEMINI_CONFIG_KEY, null, { provider: "gemini", model, keyChanged: Boolean(apiKey) });
+  return json({ ok: true, data: publicGeminiConfig(await resolveGeminiConfig(env)) });
+}
+
+async function deleteAdminAiProvider(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  await env.DB.prepare("DELETE FROM system_settings WHERE key = ?").bind(GEMINI_CONFIG_KEY).run();
+  await writeAudit(request, env, "delete_ai_provider", "system_setting", GEMINI_CONFIG_KEY, null, { provider: "gemini" });
+  return json({ ok: true, data: publicGeminiConfig(await resolveGeminiConfig(env)) });
+}
+
+function extractGeminiText(body) {
+  const chunks = [];
+  for (const candidate of Array.isArray(body?.candidates) ? body.candidates : []) {
+    for (const part of Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []) {
+      if (typeof part?.text === "string") chunks.push(part.text);
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+async function callGeminiApi(config, requestBody) {
+  const startedAt = Date.now();
+  const generationConfig = { ...(requestBody.generationConfig || {}) };
+  if (/^gemini-2\.5-/i.test(config.model)) {
+    generationConfig.thinkingConfig = generationConfig.thinkingConfig || { thinkingBudget: 0 };
+  } else {
+    generationConfig.thinkingConfig = generationConfig.thinkingConfig || { thinkingLevel: "low" };
+    delete generationConfig.temperature;
+  }
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:generateContent`, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": config.apiKey,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ ...requestBody, generationConfig }),
+  });
+  const body = await response.json().catch(() => ({}));
+  return { response, body, latencyMs: Date.now() - startedAt };
+}
+
+async function testAdminAiProvider(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const config = await resolveGeminiConfig(env);
+  if (!config.apiKey) throw new HttpError(400, config.configurationError || "gemini_api_key_missing");
+  const result = await callGeminiApi(config, {
+    contents: [{ role: "user", parts: [{ text: "只回覆 GUSYS_GEMINI_OK" }] }],
+    generationConfig: { maxOutputTokens: 128 },
+  });
+  if (!result.response.ok) {
+    const message = String(result.body?.error?.message || `Gemini HTTP ${result.response.status}`);
+    return json({ ok: false, error: "gemini_connection_failed", message }, result.response.status >= 500 ? 502 : 400);
+  }
+  return json({
+    ok: true,
+    data: {
+      ...publicGeminiConfig(config),
+      connected: true,
+      latencyMs: result.latencyMs,
+      response: extractGeminiText(result.body).slice(0, 80),
+    },
+  });
 }
 async function updateAdminCustomer(request, env) {
   requireAdmin(request, env);
@@ -2430,7 +2647,10 @@ async function analyzeLineMonitor(request, env) {
   requireDb(env);
   const cfg = aiMonitorConfig(env);
   if (!cfg.enabled) return json({ ok: false, error: "ai_monitor_disabled" }, 400);
-  if (!cfg.apiKey) return json({ ok: false, error: "openai_api_key_missing" }, 400);
+  const gemini = await resolveGeminiConfig(env);
+  if (!gemini.apiKey) return json({ ok: false, error: gemini.configurationError || "gemini_api_key_missing" }, 400);
+  cfg.apiKey = gemini.apiKey;
+  cfg.model = gemini.model;
 
   const payload = await request.json().catch(() => ({}));
   const limit = Math.min(cfg.messageLimit, Math.max(1, Number(payload.limit || cfg.messageLimit) || cfg.messageLimit));
@@ -2438,7 +2658,7 @@ async function analyzeLineMonitor(request, env) {
   const messages = await loadLineMessagesForAi(env, { threadId, limit });
   if (!messages.length) return json({ ok: false, error: "no_messages" }, 404);
 
-  const insight = await callOpenAiMonitor(cfg, messages);
+  const insight = await callGeminiMonitor(cfg, messages);
   const saved = await saveAiMonitorInsight(env, insight, messages, cfg.model);
   return json({ ok: true, data: saved });
 }
@@ -2577,7 +2797,7 @@ async function loadLineMessagesForAi(env, options) {
   return (results || []).reverse();
 }
 
-async function callOpenAiMonitor(cfg, messages) {
+async function callGeminiMonitor(cfg, messages) {
   const compactMessages = messages.map(item => ({
     id: item.id,
     threadId: item.threadId,
@@ -2595,35 +2815,40 @@ async function callOpenAiMonitor(cfg, messages) {
     JSON.stringify(compactMessages),
   ].join("\n");
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "authorization": `Bearer ${cfg.apiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: cfg.model,
-      input: prompt,
+  const result = await callGeminiApi(cfg, {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
       temperature: 0.2,
-      max_output_tokens: 600,
-    }),
+      maxOutputTokens: 600,
+      responseMimeType: "application/json",
+      responseJsonSchema: {
+        type: "object",
+        properties: {
+          category: { type: "string" },
+          risk_level: { type: "string", enum: ["low", "medium", "high"] },
+          sentiment: { type: "string", enum: ["positive", "neutral", "negative"] },
+          summary: { type: "string" },
+          recommended_action: { type: "string" },
+          tags: { type: "array", items: { type: "string" }, maxItems: 10 },
+        },
+        required: ["category", "risk_level", "sentiment", "summary", "recommended_action", "tags"],
+      },
+    },
   });
-  const text = await response.text();
-  const data = parseJson(text, null);
-  if (!response.ok) {
+  if (!result.response.ok) {
     return {
       category: "一般問題",
       risk_level: "medium",
       sentiment: "neutral",
-      summary: "OpenAI 分析失敗",
-      recommended_action: `檢查 API 狀態：HTTP ${response.status}`,
-      tags: ["openai_error"],
-      raw: data || text.slice(0, 1000),
+      summary: "Gemini 分析失敗",
+      recommended_action: `檢查 Gemini API 狀態：HTTP ${result.response.status}`,
+      tags: ["gemini_error"],
+      raw: result.body,
     };
   }
-  const outputText = extractOpenAiOutputText(data);
+  const outputText = extractGeminiText(result.body);
   const parsed = parseJson(outputText, null) || {};
-  return normalizeAiInsight({ ...parsed, raw: data });
+  return normalizeAiInsight({ ...parsed, raw: result.body });
 }
 
 function extractOpenAiOutputText(data) {
@@ -2682,8 +2907,8 @@ function aiMonitorConfig(env) {
   const enabled = String(env.AI_MONITOR_ENABLED || "true").toLowerCase() !== "false";
   return {
     enabled,
-    apiKey: String(env.OPENAI_API_KEY || "").trim(),
-    model: String(env.AI_MONITOR_MODEL || "gpt-4.1-mini").trim(),
+    apiKey: "",
+    model: String(env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL).trim(),
     messageLimit: Math.min(100, Math.max(1, Number(env.AI_MONITOR_LINE_MESSAGE_LIMIT || 30) || 30)),
     categories: splitCsv(env.AI_MONITOR_CATEGORIES || "客訴,詢價,訂單,點數,業務歸屬,產品問題,付款,出貨,一般問題"),
     riskKeywords: splitCsv(env.AI_MONITOR_RISK_KEYWORDS || "客訴,退款,詐騙,沒有收到,業務問題,產品不良,我要退貨"),
@@ -3732,14 +3957,15 @@ function normalizeDetectedSmartMenuAreas(areas) {
 
 function smartMenuAiUsage(body = {}) {
   const usage = body && typeof body.usage === "object" ? body.usage : {};
-  const inputTokens = Math.max(0, Math.round(toNum(usage.input_tokens, 0)));
-  const outputTokens = Math.max(0, Math.round(toNum(usage.output_tokens, 0)));
+  const geminiUsage = body && typeof body.usageMetadata === "object" ? body.usageMetadata : {};
+  const inputTokens = Math.max(0, Math.round(toNum(usage.input_tokens, geminiUsage.promptTokenCount || 0)));
+  const outputTokens = Math.max(0, Math.round(toNum(usage.output_tokens, geminiUsage.candidatesTokenCount || 0)));
   return {
     inputTokens,
     outputTokens,
-    totalTokens: Math.max(inputTokens + outputTokens, Math.round(toNum(usage.total_tokens, inputTokens + outputTokens))),
-    cachedInputTokens: Math.max(0, Math.round(toNum(usage.input_tokens_details?.cached_tokens, 0))),
-    reasoningTokens: Math.max(0, Math.round(toNum(usage.output_tokens_details?.reasoning_tokens, 0))),
+    totalTokens: Math.max(inputTokens + outputTokens, Math.round(toNum(usage.total_tokens, geminiUsage.totalTokenCount || inputTokens + outputTokens))),
+    cachedInputTokens: Math.max(0, Math.round(toNum(usage.input_tokens_details?.cached_tokens, geminiUsage.cachedContentTokenCount || 0))),
+    reasoningTokens: Math.max(0, Math.round(toNum(usage.output_tokens_details?.reasoning_tokens, geminiUsage.thoughtsTokenCount || 0))),
   };
 }
 
@@ -3854,13 +4080,14 @@ async function analyzeSmartMenuImage(request, env) {
   const imageDataUrl = String(payload.imageDataUrl || payload.image || "").trim();
   const image = parseDataUrlImage(imageDataUrl);
   if (!image) return json({ ok: false, success: false, error: "請先上傳 JPG 或 PNG 圖文選單底圖。" }, 400);
-  if (!String(env.OPENAI_API_KEY || "").trim()) {
+  const config = await resolveGeminiConfig(env);
+  if (!config.apiKey) {
     await recordSmartMenuAiUsage(env, {
       provider: "fallback",
       model: "",
       status: "fallback",
       latencyMs: Date.now() - startedAt,
-      errorCode: "OPENAI_API_KEY_NOT_CONFIGURED",
+      errorCode: config.configurationError || "GEMINI_API_KEY_NOT_CONFIGURED",
     }).catch(() => {});
     return json({
       ok: true,
@@ -3868,7 +4095,7 @@ async function analyzeSmartMenuImage(request, env) {
       provider: "fallback",
       model: "",
       areas: defaultSmartMenuAreas(),
-      notes: ["OPENAI_API_KEY 未設定，已套用 6 格預設熱區。"],
+      notes: ["Gemini API Key 尚未設定，已套用 6 格預設熱區。請至系統設定輸入金鑰。"],
     });
   }
   const prompt = [
@@ -3878,41 +4105,67 @@ async function analyzeSmartMenuImage(request, env) {
     "座標需為整數，區塊不得超界。label 使用繁體中文。action 優先使用 message，若明顯是外部網址才用 uri。",
     "不要輸出 Markdown，不要輸出 JSON 以外內容。",
   ].join("\n");
-  const model = String(env.SMART_MENU_AI_MODEL || env.AI_MONITOR_MODEL || "gpt-4.1-mini").trim();
-  const aiRes = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "authorization": `Bearer ${String(env.OPENAI_API_KEY).trim()}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      input: [{
-        role: "user",
-        content: [
-          { type: "input_text", text: prompt },
-          { type: "input_image", image_url: imageDataUrl },
-        ],
-      }],
+  const model = config.model;
+  const result = await callGeminiApi(config, {
+    contents: [{
+      role: "user",
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: image.contentType, data: bytesToBase64(image.bytes) } },
+      ],
+    }],
+    generationConfig: {
       temperature: 0.1,
-    }),
+      responseMimeType: "application/json",
+      responseJsonSchema: {
+            type: "object",
+            properties: {
+              areas: {
+                type: "array",
+                minItems: 1,
+                maxItems: 20,
+                items: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string" },
+                    x: { type: "integer", minimum: 0, maximum: 2499 },
+                    y: { type: "integer", minimum: 0, maximum: 1685 },
+                    width: { type: "integer", minimum: 1, maximum: 2500 },
+                    height: { type: "integer", minimum: 1, maximum: 1686 },
+                    action: {
+                      type: "object",
+                      properties: {
+                        type: { type: "string", enum: ["message", "uri", "postback"] },
+                        text: { type: "string" },
+                        uri: { type: "string" },
+                        data: { type: "string" },
+                      },
+                      required: ["type"],
+                    },
+                  },
+                  required: ["label", "x", "y", "width", "height", "action"],
+                },
+              },
+              notes: { type: "array", items: { type: "string" } },
+            },
+            required: ["areas", "notes"],
+      },
+    },
   });
-  const body = await aiRes.json().catch(() => ({}));
-  if (!aiRes.ok) {
-    const errorCode = String(body?.error?.code || body?.error?.type || `HTTP_${aiRes.status}`);
-    const errorMessage = String(body?.error?.message || "");
-    const creditExhausted = errorCode === "credit_balance_exhausted"
-      || errorCode === "insufficient_quota"
-      || /no credits remaining|credit balance|billing/i.test(errorMessage);
+  const body = result.body;
+  if (!result.response.ok) {
+    const errorCode = String(body?.error?.status || body?.error?.code || `HTTP_${result.response.status}`);
+    const errorMessage = String(body?.error?.message || "Gemini 圖片分析失敗");
+    const quotaExceeded = result.response.status === 429 || /quota|billing|resource_exhausted/i.test(`${errorCode} ${errorMessage}`);
     await recordSmartMenuAiUsage(env, {
-      provider: "openai",
+      provider: "gemini",
       model,
-      status: creditExhausted ? "fallback" : "failed",
+      status: quotaExceeded ? "fallback" : "failed",
       body,
       latencyMs: Date.now() - startedAt,
       errorCode,
     }).catch(() => {});
-    if (creditExhausted) {
+    if (quotaExceeded) {
       return json({
         ok: true,
         success: true,
@@ -3920,23 +4173,23 @@ async function analyzeSmartMenuImage(request, env) {
         model,
         fallbackReason: errorCode,
         areas: defaultSmartMenuAreas(),
-        notes: ["OpenAI API 額度已用完，已載入六格備援熱區。這不是 AI 辨識結果，請人工確認座標與 Action。"],
+        notes: ["Gemini API 額度或速率已達上限，已載入六格備援熱區。這不是 AI 辨識結果，請人工確認座標與 Action。"],
       });
     }
-    return json({ ok: false, success: false, error: body?.error?.message || "AI 圖片分析失敗" }, 500);
+    return json({ ok: false, success: false, error: errorMessage }, result.response.status >= 500 ? 502 : 400);
   }
   await recordSmartMenuAiUsage(env, {
-    provider: "openai",
+    provider: "gemini",
     model,
     status: "success",
     body,
-    latencyMs: Date.now() - startedAt,
+    latencyMs: result.latencyMs,
   }).catch(() => {});
-  const parsed = parseSmartMenuAiJson(extractSmartMenuAiText(body));
+  const parsed = parseSmartMenuAiJson(extractGeminiText(body));
   return json({
     ok: true,
     success: true,
-    provider: "openai",
+    provider: "gemini",
     model,
     areas: normalizeDetectedSmartMenuAreas(parsed.areas),
     notes: Array.isArray(parsed.notes) ? parsed.notes.map(item => String(item || "")).filter(Boolean) : [],
@@ -4973,6 +5226,7 @@ function renderHookteaAdminPage(env) {
       </div>
     </section>
     <section class="view" id="view-settings"><div class="settings-wrap"><section class="settings-card"><div class="panel-header" style="padding:0 0 16px;border-bottom:0"><div><div class="section-title">首頁頂部橫幅 (Banner) 高效上傳 (Cloudflare R2)</div><div class="muted">HookTea 原設定區塊</div></div><div><span class="muted" id="settingsStatus"></span> <button class="btn-outline btn-small" id="reloadSettings">重新載入</button> <button class="btn-green-main btn-small" id="saveSettings">確認儲存並同步雲端參數</button></div></div><div style="aspect-ratio:21/9;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden;margin-bottom:14px"><img id="bannerPreview" alt="" style="width:100%;height:100%;object-fit:cover;display:none"><span id="bannerEmpty" class="muted">尚未設定橫幅</span></div><input data-setting="banner_image" class="mono" placeholder="Banner 圖片網址 (R2 URL)"></section>
+      <section class="settings-card" id="geminiSettingsCard"><div class="panel-header" style="padding:0 0 16px"><div><div class="section-title">Gemini API 設定</div><div class="muted">供 AI 後台監控與 Smart Menu 圖片辨識使用</div></div><span class="status-badge warn" id="geminiConfiguredBadge">讀取中</span></div><div class="form-grid" style="margin-top:18px"><label class="full-span"><span class="input-label">Gemini API Key</span><input id="geminiApiKey" type="password" autocomplete="new-password" class="mono" placeholder="輸入新的 API Key；已設定時留空可保留原金鑰"><div class="settings-note">金鑰只會傳送至 Worker，使用 AES-GCM 加密後保存；此頁不會讀回明文。</div></label><label class="full-span"><span class="input-label">Gemini 模型</span><input id="geminiModel" class="mono" list="geminiModelOptions" value="gemini-3.7-flash"><datalist id="geminiModelOptions"><option value="gemini-3.7-flash"><option value="gemini-3.6-flash"><option value="gemini-3.5-flash"><option value="gemini-3.5-flash-lite"><option value="gemini-2.5-flash"></datalist></label></div><div class="settings-band" style="background:#f8fafc;border-color:#e2e8f0"><div><strong id="geminiStatusTitle">尚未設定</strong><div class="settings-note" id="geminiStatusDetail">請輸入 Gemini API Key 後儲存並測試連線。</div></div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn-outline btn-small" id="testGemini">測試連線</button><button class="btn-outline btn-small" id="clearGemini">清除設定</button><button class="btn-green-main btn-small" id="saveGemini">儲存 Gemini 設定</button></div></div><div class="settings-note" id="geminiActionStatus"></div></section>
       <section class="settings-card"><div class="section-title">紅包獎勵、LIFF 與社群連結</div><div class="form-grid" style="margin-top:18px"><label class="full-span"><span class="input-label">前台推薦好友 LIFF ID</span><input data-setting="liff_id" class="mono" placeholder="Endpoint URL: https://gusys.fangwl591021.workers.dev/shop"></label><label class="full-span"><span class="input-label">後台 CRM LIFF ID</span><input data-setting="crm_liff_id" class="mono" placeholder="Endpoint URL: https://gusys.fangwl591021.workers.dev/admin"><div class="settings-note">後台 LINE 登入必須使用獨立 LIFF，不能共用前台推薦好友 LIFF，否則 LINE 會回 400 Bad Request。</div></label></div><div class="settings-band"><div><strong>CRM LINE Login 免帳密登入</strong><div class="settings-note">開啟後，具管理權限的 LINE 帳號可直接登入 CRM；關閉時只能使用帳密登入。</div></div><select data-setting="crm_line_login_enabled"><option value="false">關閉</option><option value="true">開啟</option></select></div><label><span class="input-label">總部管理（輸入 LINE UID）</span><textarea data-setting="crm_login_uids" class="mono" placeholder="每行或逗號分隔 LINE UID。此名單可登入總部管理後台，並取得完整管理權限。"></textarea><div class="settings-note">請填 LINE 回傳的 U 開頭 UID；舊站會員編號不能直接用於 LINE 登入。總部管理白名單等同完整後台管理權限。</div></label><div class="settings-band" style="background:#eef2ff;border-color:#c7d2fe"><div><strong>低風險資料優先讀 Wasabi</strong><div class="settings-note">只影響課程 / 預約服務、商城商品、影音資料。讀取失敗會自動回退 R2/KV；會員、點數、訂單不受影響。</div></div><select data-setting="low_risk_wasabi_read_enabled"><option value="false">停用</option><option value="true">啟用</option></select></div><div class="settings-band" style="background:#fff1f2;border-color:#fecdd3"><div><strong>高風險資料優先讀 Wasabi</strong><div class="settings-note">影響會員、會員點數、點數進出總表、訂單。只在每日總檢查通過後再開啟；讀取失敗會回退 R2 live / KV。</div></div><select data-setting="high_risk_wasabi_read_enabled"><option value="false">停用</option><option value="true">啟用</option></select></div><div class="form-grid"><label><span class="input-label">註冊系統 (點)</span><input type="number" data-setting="reward_register"></label><label><span class="input-label">自己加OA好友 (點)</span><input type="number" data-setting="reward_add_friend"></label><label><span class="input-label">受邀註冊/被加 (點)</span><input type="number" data-setting="reward_referred"></label><label><span class="input-label">推薦好友 (點)</span><input type="number" data-setting="reward_refer"></label><label><span class="input-label">每日打卡 (點)</span><input type="number" data-setting="reward_daily"></label></div><div class="form-grid"><label><span class="input-label">LINE OA 網址</span><input data-setting="link_lineoa"></label><label><span class="input-label">Facebook 網址</span><input data-setting="link_fb"></label><label><span class="input-label">Instagram 網址</span><input data-setting="link_ig"></label><label><span class="input-label">TikTok 網址</span><input data-setting="link_tiktok"></label></div><div class="section-title" style="margin-top:22px;color:#c2410c">官方匯款帳號設定</div><label><span class="input-label">匯款資訊 (將顯示於前台結帳頁面)</span><textarea data-setting="remittance_info"></textarea></label><div class="section-title" style="margin-top:22px;color:#0369a1">Telegram 群組通知</div><div class="form-grid"><label><span class="input-label">Telegram Bot Token</span><input type="password" data-setting="telegram_bot_token" class="mono" placeholder="Cloudflare Worker Secret recommended"></label><label><span class="input-label">Telegram Chat ID / 群組 ID</span><input data-setting="telegram_chat_id" class="mono" placeholder="-1001234567890"></label></div><div class="settings-note">審核、會員綁定、報名與商城訂單等待處理訊息會推送到此群組。Worker 變數可用：TELEGRAM_BOT_TOKEN、TELEGRAM_CHAT_ID；舊名稱 TG_BOT_TOKEN、TG_CHAT_ID 仍支援。</div></section>
       <section class="settings-card"><div class="section-title">前台體驗開關</div><div class="settings-band" style="background:#f8fafc;border-color:#e2e8f0"><div><strong>開放學員自行取消報名</strong><div class="settings-note">啟用後，學員可在「待付款」訂單下方看見取消按鈕</div></div><select data-setting="allow_cancel_order"><option value="true">啟用</option><option value="false">停用</option></select></div><div class="section-title" style="margin-top:22px;color:#047857">WordPress 點數系統串接 (資料備份與遷徙)</div><div class="settings-band" style="background:#ecfdf5;border-color:#bbf7d0"><div><strong>啟用點數單向同步</strong><div class="settings-note">開啟後系統會執行自動遷徙偵測與背景備份。</div></div><select data-setting="wp_sync_enabled"><option value="true">啟用</option><option value="false">停用</option></select></div><div class="form-grid"><label><span class="input-label">WordPress API Key</span><input data-setting="wp_api_key" class="mono" placeholder="WETW_MASTER_API..."></label><label><span class="input-label">WordPress 商店 ID (shop_id)</span><input type="number" data-setting="wp_shop_id"></label><label class="full-span"><span class="input-label">WordPress API URL</span><input type="url" data-setting="wp_api_url" class="mono" placeholder="https://example.com/wp-json/..."></label><label class="full-span"><span class="input-label">WordPress 點數類型</span><input data-setting="wp_point_type" class="mono" placeholder="system_point"></label></div></section>
       <section class="settings-card"><div class="section-title">LINE Pay 金流 API 設定</div><div class="form-grid" style="margin-top:18px"><label><span class="input-label">LINE Pay 環境</span><select data-setting="linepay_env"><option value="sandbox">Sandbox 測試</option><option value="production">Production 正式</option></select></label><label><span class="input-label">LINE Pay Channel ID</span><input data-setting="linepay_channel_id" class="mono"></label><label><span class="input-label">幣別</span><input data-setting="linepay_currency" class="mono" placeholder="TWD"></label><label class="full-span"><span class="input-label">LINE Pay Channel Secret</span><input type="password" data-setting="linepay_channel_secret" class="mono" placeholder="建議放 Cloudflare Worker Secret"></label></div><div class="settings-note">Worker 變數可用：LINEPAY_ENV、LINEPAY_CHANNEL_ID、LINEPAY_CHANNEL_SECRET、LINEPAY_CURRENCY。正式收款請把環境切到 production。</div><div class="section-title" style="margin-top:22px">藍新金流 API 設定</div><div class="settings-band"><div><strong>啟用電子發票 (藍新幕後開立)</strong><div class="settings-note">開啟後，學員在進入藍新刷卡頁面時，系統會自動跳出「索取雲端發票、手機條碼載具、公司統編」的完整填寫區塊。</div></div><select data-setting="enable_einvoice"><option value="true">啟用</option><option value="false">停用</option></select></div><div class="form-grid"><label class="full-span"><span class="input-label">商店代號 (MerchantID)</span><input data-setting="newebpay_merchant_id" class="mono"></label><label><span class="input-label">HashKey</span><input data-setting="newebpay_hash_key" class="mono"></label><label><span class="input-label">HashIV</span><input data-setting="newebpay_hash_iv" class="mono"></label></div></section>
@@ -5042,6 +5296,7 @@ function renderHookteaAdminPage(env) {
     on("#createSales", "click", async () => { try{ await api("/api/sales/reps",{method:"POST",body:JSON.stringify({name:qs("#salesName").value,phone:qs("#salesPhone").value,lineUserId:qs("#salesLine").value,salesCode:qs("#salesCode").value})}); qs("#salesStatus").textContent = "已建立"; await Promise.all([loadSales(),loadSummary()]); }catch(err){ qs("#salesStatus").textContent = err.message; } });
     on("#createProduct", "click", saveProductForm); on("#cancelProductEdit", "click", closeProductModal); on("#newProductBtn", "click", openNewProductModal); on("#productModalClose", "click", closeProductModal); on("#deleteProductBtn", "click", deleteProductForm); on("#productSearch", "input", renderProductRows); on("#uploadProductImage", "click", () => qs("#productImageFile")?.click()); on("#productImageFile", "change", handleProductImageUpload); on("#clearProductImage", "click", () => { qs("#productImage").value=""; const file=qs("#productImageFile"); if(file) file.value=""; updateProductImagePreview(); }); on("#orderSearch", "input", renderOrderRows); on("#orderTypeFilter", "change", renderOrderRows); on("#reloadOrders", "click", loadOrders); on("#orderModalClose", "click", closeOrderModal); on("#cancelOrderEdit", "click", closeOrderModal); on("#saveOrderEdit", "click", saveOrderUpdate);
     on("#runAi", "click", async () => { qs("#aiRunStatus").textContent = "分析中"; try{ await api("/api/ai-monitor/analyze",{method:"POST",body:JSON.stringify({limit:30})}); qs("#aiRunStatus").textContent = "完成"; await loadAi(); }catch(err){ qs("#aiRunStatus").textContent = err.message; } }); on("#loadReport", "click", () => loadReports()); on("#reloadSettings", "click", () => loadSettings()); on("#saveSettings", "click", () => saveSettings("settingsStatus")); on("#saveShopModules", "click", () => saveSettings("shopModuleStatus")); on("#customerSearch", "input", () => renderCustomers()); on("#pointsSearch", "input", () => renderPointMembers()); on("#refreshPoints", "click", () => loadSelectedPointLedger()); on("#crmClose", "click", closeCrmModal); on("#crmCancel", "click", closeCrmModal); on("#crmSave", "click", saveCustomerCrm); on("#syncProfiles", "click", syncProfiles); on("#grantPoints", "click", () => submitPointAdjust("earn")); on("#deductPoints", "click", () => submitPointAdjust("spend")); on("#reloadBroadcastData", "click", loadActionModules); on("#reloadBroadcastHistory", "click", loadActionModules); on("#saveBroadcastTag", "click", saveBroadcastTag); on("#sendBroadcast", "click", () => sendPaidBroadcast(false)); on("#sendBroadcastTest", "click", () => sendPaidBroadcast(true)); on("#broadcastMessage", "input", () => { const el=qs("#broadcastMessage"); const c=qs("#broadcastCharCount"); if(c&&el)c.textContent=el.value.length+" / 4900"; }); ["#broadcastTag","#broadcastTier","#broadcastKeyword","#broadcastMemberSearch"].forEach(sel => on(sel, "input", renderBroadcast)); on("#broadcastSelectAll", "change", e => { qsa("[data-broadcast-uid]").forEach(cb => cb.checked = e.target.checked); renderBroadcastCounts(); }); on("#broadcastClearSelection", "click", () => { qsa("[data-broadcast-uid]").forEach(cb => cb.checked = false); renderBroadcastCounts(); }); on("#saveReplyRule", "click", saveReplyRule); on("#cancelReplyRuleEdit", "click", () => setReplyRuleForm(null)); ["#flexRuleSearch","#flexRuleTypeFilter","#flexRuleStatusFilter"].forEach(sel => on(sel, "input", renderReplyRules));
+    on("#saveGemini", "click", saveGeminiProvider); on("#testGemini", "click", testGeminiProvider); on("#clearGemini", "click", clearGeminiProvider);
     function showUnauthorized(){ qs("#systemStatus").textContent = "需要 token"; qs("#systemStatus").className = "status-badge warn"; setLoginCover(true); } function tableEmpty(cols,text){ return '<tr><td colspan="'+cols+'" class="empty">'+esc(text)+'</td></tr>'; }
     async function loadSummary(){ const s = await api("/api/admin/summary"); qs("#metrics").innerHTML = [["業務",s.sales],["用戶",s.customers],["商品",s.products],["LINE 訊息",s.messages],["母站轉送",s.webhooks],["高風險",s.highRisk]].map(i => '<div class="stat-card"><div class="stat-label">'+esc(i[0])+'</div><div class="stat-value">'+money(i[1])+'</div></div>').join(""); const latest = s.latestMother || {}; const motherState = latest.motherStatus ? "HTTP " + latest.motherStatus : "尚無紀錄"; qs("#opsSummary").innerHTML = [["Worker",publicUrl],["LINE Webhook",publicUrl+"/line-webhook"],["母站 Webhook",motherUrl],["最近母站轉送",motherState],["最近訊息",latest.messageText||"尚無"],["最近時間",latest.createdAt||"尚無"]].map(i => '<div class="ops-item"><div class="ops-label">'+esc(i[0])+'</div><div class="ops-value">'+esc(i[1])+'</div></div>').join(""); qs("#lastRefresh").textContent = new Date().toLocaleString("zh-TW"); qs("#systemStatus").textContent = "正常"; qs("#systemStatus").className = "status-badge"; }
     async function loadSales(){ const rows = await api("/api/sales/reps"); qs("#salesRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong><div class="muted">'+esc(r.phone)+'</div></td><td class="mono">'+esc(r.salesCode)+'</td><td>'+(r.qrUrl?'<img class="qr" src="'+esc(r.qrUrl)+'" alt="QR">':"-")+'</td><td><a href="'+esc(r.inviteUrl)+'" target="_blank">開啟</a><div class="mono summary-text">'+esc(r.inviteUrl)+'</div></td><td>'+badge(r.status||"active")+'</td></tr>').join("") || tableEmpty(5,"尚無業務"); }
@@ -5118,6 +5373,11 @@ function renderHookteaAdminPage(env) {
     async function saveReplyRule(){ const payload={id:qs("#replyRuleId").value,moduleName:qs("#replyRuleName").value,keyword:qs("#replyRuleKeyword").value,replyType:qs("#replyRuleType").value,active:qs("#replyRuleActive").value!=="false",flexTemplate:qs("#replyRuleTemplate").value,previewImageUrl:qs("#replyRulePreview").value,altText:qs("#replyRuleAlt").value,payload:qs("#replyRulePayload").value}; qs("#replyRuleStatus").textContent="儲存中"; try{ replyRules=await api("/api/admin/reply-rules",{method:"POST",body:JSON.stringify(payload)}); broadcastData.modules=replyRules; qs("#replyRuleStatus").textContent="模組已儲存"; renderReplyRules(); renderBroadcast(); }catch(err){ qs("#replyRuleStatus").textContent=err.message; } }
     async function deleteReplyRule(id){ if(!confirm("刪除此模組？")) return; try{ replyRules=await api("/api/admin/reply-rules?id="+encodeURIComponent(id),{method:"DELETE"}); broadcastData.modules=replyRules; renderReplyRules(); renderBroadcast(); }catch(err){ qs("#replyRuleStatus").textContent=err.message; } }
     qsa("[data-new-rule]").forEach(btn => btn.onclick = () => newReplyRule(btn.dataset.newRule));
+    function renderGeminiProvider(config){ const badgeEl=qs("#geminiConfiguredBadge"); const title=qs("#geminiStatusTitle"); const detail=qs("#geminiStatusDetail"); const model=qs("#geminiModel"); if(model && config?.model) model.value=config.model; if(config?.configured){ badgeEl.textContent="已設定"; badgeEl.className="status-badge"; title.textContent="Gemini 已連線設定"; const source=config.source==="worker_secret"?"Cloudflare Worker Secret":"後台加密設定"; detail.textContent=source+" · "+(config.maskedKey||"已遮罩")+(config.updatedAt?" · 更新 "+config.updatedAt:""); }else{ badgeEl.textContent="未設定"; badgeEl.className="status-badge warn"; title.textContent="尚未設定 Gemini API Key"; detail.textContent=config?.configurationError?("設定無法解密："+config.configurationError):"輸入 API Key 後儲存，再執行連線測試。"; } }
+    async function loadGeminiProvider(){ const status=qs("#geminiActionStatus"); try{ const config=await api("/api/admin/ai-provider"); renderGeminiProvider(config); if(status) status.textContent=""; }catch(err){ if(status) status.textContent=err.message; } }
+    async function saveGeminiProvider(){ const status=qs("#geminiActionStatus"); if(status) status.textContent="加密儲存中"; try{ const config=await api("/api/admin/ai-provider",{method:"POST",body:JSON.stringify({apiKey:qs("#geminiApiKey").value.trim(),model:qs("#geminiModel").value.trim()})}); qs("#geminiApiKey").value=""; renderGeminiProvider(config); if(status) status.textContent="Gemini 設定已儲存"; }catch(err){ if(status) status.textContent="儲存失敗："+err.message; } }
+    async function testGeminiProvider(){ const status=qs("#geminiActionStatus"); if(status) status.textContent="正在測試 Gemini 連線"; try{ const result=await api("/api/admin/ai-provider/test",{method:"POST",body:"{}"}); renderGeminiProvider(result); if(status) status.textContent="連線成功，耗時 "+money(result.latencyMs)+" ms"; }catch(err){ if(status) status.textContent="連線失敗："+err.message; } }
+    async function clearGeminiProvider(){ if(!confirm("清除後台儲存的 Gemini API Key 與模型設定？")) return; const status=qs("#geminiActionStatus"); if(status) status.textContent="清除中"; try{ const config=await api("/api/admin/ai-provider",{method:"DELETE"}); qs("#geminiApiKey").value=""; renderGeminiProvider(config); if(status) status.textContent=config.configured?"已清除後台設定，目前仍使用 Worker Secret":"Gemini 設定已清除"; }catch(err){ if(status) status.textContent="清除失敗："+err.message; } }
     function settingFields(){ return qsa("[data-setting]"); }
     function fillSettings(s){ hookteaSettings=s||{}; settingFields().forEach(el => { const key = el.dataset.setting; el.value = hookteaSettings[key] ?? ""; }); renderSettingsPreview(); renderLiffLinks(); }
     function collectSettings(){ const next = {...(hookteaSettings||{})}; settingFields().forEach(el => { next[el.dataset.setting] = el.value ?? ""; }); return next; }
@@ -5126,7 +5386,7 @@ function renderHookteaAdminPage(env) {
     function setShopTab(tab){ qsa("[data-shop-tab]").forEach(btn => btn.classList.toggle("active", btn.dataset.shopTab === tab)); qsa(".shop-tab-panel").forEach(panel => panel.style.display = panel.id === "shopTab-" + tab ? "block" : "none"); }
     qsa("[data-shop-tab]").forEach(btn => btn.onclick = () => setShopTab(btn.dataset.shopTab));
     settingFields().forEach(el => el.addEventListener("input", () => { const key = el.dataset.setting; settingFields().forEach(other => { if(other !== el && other.dataset.setting === key) other.value = el.value; }); hookteaSettings = collectSettings(); renderSettingsPreview(); renderLiffLinks(); }));
-    async function loadSettings(){ const status = qs("#settingsStatus"); const shopStatus = qs("#shopModuleStatus"); if(status) status.textContent="讀取中"; if(shopStatus) shopStatus.textContent="讀取中"; try{ const data=await api("/api/admin/settings"); fillSettings(data.settings||{}); const label=data.updatedAt?"已載入 "+data.updatedAt:"已載入預設值"; if(status) status.textContent=label; if(shopStatus) shopStatus.textContent=label; }catch(err){ if(status) status.textContent=err.message; if(shopStatus) shopStatus.textContent=err.message; } }
+    async function loadSettings(){ const status = qs("#settingsStatus"); const shopStatus = qs("#shopModuleStatus"); if(status) status.textContent="讀取中"; if(shopStatus) shopStatus.textContent="讀取中"; try{ const [data]=await Promise.all([api("/api/admin/settings"),loadGeminiProvider()]); fillSettings(data.settings||{}); const label=data.updatedAt?"已載入 "+data.updatedAt:"已載入預設值"; if(status) status.textContent=label; if(shopStatus) shopStatus.textContent=label; }catch(err){ if(status) status.textContent=err.message; if(shopStatus) shopStatus.textContent=err.message; } }
     async function saveSettings(statusId){ const target = qs("#"+(statusId||"settingsStatus")); if(target) target.textContent="儲存中"; try{ const saved=await api("/api/admin/settings",{method:"POST",body:JSON.stringify({settings:collectSettings()})}); fillSettings(saved.settings||{}); if(target) target.textContent="設定已儲存"; }catch(err){ if(target) target.textContent=err.message; } }    async function loadReports(){ const period = qs("#reportPeriod").value || new Date().toISOString().slice(0,7); qs("#reportPeriod").value = period; const rows = await api("/api/reports/monthly-sales?period=" + encodeURIComponent(period)); qs("#reportRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.salesName||"-")+'</td><td class="mono">'+esc(r.salesCode||"")+'</td><td>'+money(r.orderCount)+'</td><td>'+money(r.revenue)+'</td><td>'+money(r.grossProfit)+'</td></tr>').join("") || tableEmpty(5,"尚無業績資料"); }
     async function loadAll(){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadOrders(),loadMessages(),loadWebhooks(),loadAudit(),loadAi(),loadReports(),loadSettings()]); }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } } }
     setView("dashboard"); loadAll();
