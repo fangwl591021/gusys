@@ -87,7 +87,7 @@ export default {
       if (url.pathname === "/api/admin/smart-menu/projects" && request.method === "GET") return listSmartMenuProjects(request, env);
       if (url.pathname === "/api/admin/smart-menu/projects" && request.method === "POST") return createSmartMenuProject(request, env);
       if (url.pathname === "/api/admin/smart-menu/projects/from-template" && request.method === "POST") return createSmartMenuProjectFromTemplate(request, env);
-      if (url.pathname.startsWith("/api/admin/smart-menu/projects/")) return handleSmartMenuProjectRoute(request, env, url);
+      if (url.pathname.startsWith("/api/admin/smart-menu/projects/")) return await handleSmartMenuProjectRoute(request, env, url);
       if (url.pathname === "/api/reports/monthly-sales" && request.method === "GET") return await monthlySalesReport(request, env);
 
       return json({ ok: false, error: "not_found", path: url.pathname }, 404);
@@ -4702,6 +4702,8 @@ async function publishSmartMenuProject(request, env, projectId) {
   if (!project.areas.length) return json({ ok: false, success: false, error: "請至少建立一個熱區。" }, 400);
 
   const projects = await listSmartMenuProjectRows(env);
+  const currentDefault = projects.find(item => item.status === "default");
+  const shouldSetDefault = project.status === "default" || !currentDefault;
   const activeIds = new Set(projects.filter(item => item.status !== "disabled" && item.id !== projectId).map(item => item.id));
   const lineAreas = project.areas.map(area => {
     const action = normalizeSmartMenuAction(area.action);
@@ -4748,15 +4750,32 @@ async function publishSmartMenuProject(request, env, projectId) {
 
   const richMenuAliasId = smartMenuAliasIdForProject(projectId);
   const alias = await upsertSmartMenuAlias(token, richMenuAliasId, richMenuId);
-  await env.DB.prepare(`
-    UPDATE smart_menu_projects
-    SET status = CASE WHEN status = 'default' THEN 'default' ELSE 'published' END,
-        line_rich_menu_id = ?, rich_menu_alias_id = ?, updated_at = datetime('now')
-    WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL
-  `).bind(richMenuId, richMenuAliasId, projectId, workspaceId).run();
+  let defaultVerification = { verified: false, richMenuId: "", attempts: 0 };
+  if (shouldSetDefault) {
+    await setSmartMenuDefault(token, richMenuId);
+    defaultVerification = await verifySmartMenuDefault(token, richMenuId);
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE smart_menu_projects
+        SET status = 'published', updated_at = datetime('now')
+        WHERE workspace_id = ? AND status = 'default' AND id <> ? AND deleted_at IS NULL
+      `).bind(workspaceId, projectId),
+      env.DB.prepare(`
+        UPDATE smart_menu_projects
+        SET status = 'default', line_rich_menu_id = ?, rich_menu_alias_id = ?, updated_at = datetime('now')
+        WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL
+      `).bind(richMenuId, richMenuAliasId, projectId, workspaceId),
+    ]);
+  } else {
+    await env.DB.prepare(`
+      UPDATE smart_menu_projects
+      SET status = 'published', line_rich_menu_id = ?, rich_menu_alias_id = ?, updated_at = datetime('now')
+      WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL
+    `).bind(richMenuId, richMenuAliasId, projectId, workspaceId).run();
+  }
   const updated = await loadSmartMenuProject(env, projectId);
   await writeAudit(request, env, "smart_menu_publish", "smart_menu_project", projectId, project, updated);
-  return json({ ok: true, success: true, project: updated, alias, richMenu: richMenuObject, richMenuId, richMenuAliasId });
+  return json({ ok: true, success: true, project: updated, alias, defaultVerification, richMenu: richMenuObject, richMenuId, richMenuAliasId });
 }
 
 async function setDefaultSmartMenuProject(request, env, projectId) {
@@ -4773,6 +4792,7 @@ async function setDefaultSmartMenuProject(request, env, projectId) {
   const richMenuId = String(alias?.richMenuId || project.lineRichMenuId || "").trim();
   if (!richMenuId) return json({ ok: false, success: false, error: "此專案尚未發布或 Alias 不存在，請先發布。" }, 409);
   await setSmartMenuDefault(token, richMenuId);
+  const defaultVerification = await verifySmartMenuDefault(token, richMenuId);
   await env.DB.batch([
     env.DB.prepare(`
       UPDATE smart_menu_projects
@@ -4787,7 +4807,7 @@ async function setDefaultSmartMenuProject(request, env, projectId) {
   ]);
   const updated = await loadSmartMenuProject(env, projectId);
   await writeAudit(request, env, "smart_menu_set_default", "smart_menu_project", projectId, project, updated);
-  return json({ ok: true, success: true, project: updated, richMenuAliasId, richMenuId });
+  return json({ ok: true, success: true, project: updated, defaultVerification, richMenuAliasId, richMenuId });
 }
 
 async function disableSmartMenuProject(request, env, projectId) {
@@ -5025,7 +5045,31 @@ async function setSmartMenuDefault(token, richMenuId) {
     method: "POST",
     headers: { "authorization": `Bearer ${token}` },
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw new Error(`設定 LINE 預設 Rich Menu 失敗：${await response.text()}`);
+}
+
+async function getSmartMenuDefault(token) {
+  const response = await fetch("https://api.line.me/v2/bot/user/all/richmenu", {
+    headers: { "authorization": `Bearer ${token}` },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`讀取 LINE 預設 Rich Menu 失敗：${await response.text()}`);
+  return response.json();
+}
+
+async function verifySmartMenuDefault(token, expectedRichMenuId, attempts = 4) {
+  let actualRichMenuId = "";
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const current = await getSmartMenuDefault(token);
+    actualRichMenuId = String(current?.richMenuId || "").trim();
+    if (actualRichMenuId === expectedRichMenuId) {
+      return { verified: true, richMenuId: actualRichMenuId, attempts: attempt + 1 };
+    }
+    if (attempt < attempts - 1) {
+      await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+  }
+  throw new Error(`LINE 預設 Rich Menu 驗證失敗：預期 ${expectedRichMenuId}，實際 ${actualRichMenuId || "未設定"}`);
 }
 
 async function monthlySalesReport(request, env) {
@@ -5304,7 +5348,7 @@ function renderHookteaAdminPage(env) {
     <section class="view" id="view-webhooks"><section class="panel"><div class="panel-header"><div class="section-title">雙 Webhook 轉送狀態</div><span class="muted">LINE OA -> Gusys Worker -> 母站</span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>來源</th><th>訊息</th><th>母站狀態</th><th>摘要</th></tr></thead><tbody id="webhookRows"></tbody></table></div></section></section>
     <section class="view" id="view-paid_broadcast"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/action-modules.html?view=paid_broadcast" style="width:100%;height:100%;border:0;display:block;background:#f8fafc"></iframe></section></section>
     <section class="view" id="view-flex_rules"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/action-modules.html?view=flex_rules" style="width:100%;height:100%;border:0;display:block;background:#f8fafc"></iframe></section></section>
-    <section class="view" id="view-richmenu"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/smart-menu.html?embed=1&v=smart-menu-studio-replica-20260828" style="width:100%;height:100%;border:0;display:block"></iframe></section></section>
+    <section class="view" id="view-richmenu"><section class="panel" style="height:calc(100vh - 140px);margin-bottom:0"><iframe src="/smart-menu.html?embed=1&v=smart-menu-studio-replica-20260829" style="width:100%;height:100%;border:0;display:block"></iframe></section></section>
     <section class="view" id="view-audit"><section class="panel"><div class="panel-header"><div><div class="section-title">操作紀錄</div><div class="muted">後台操作、LINE 訊息與母站轉送紀錄</div></div><div><span class="muted" id="auditStatus"></span> <button class="btn-outline btn-small" id="refreshAudit">重新整理</button></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>類型</th><th>動作</th><th>操作者</th><th>目標</th><th>摘要</th></tr></thead><tbody id="auditRows"></tbody></table></div></section></section>
     <section class="view" id="view-shop_modules">
       <div class="shop-module-page">
