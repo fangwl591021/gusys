@@ -64,8 +64,8 @@ export default {
       if (url.pathname === "/api/products" && request.method === "POST") return createProduct(request, env);
       if (url.pathname.startsWith("/api/products/") && request.method === "PATCH") return updateProduct(request, env, decodeURIComponent(url.pathname.slice("/api/products/".length)));
       if (url.pathname.startsWith("/api/products/") && request.method === "DELETE") return deleteProduct(request, env, decodeURIComponent(url.pathname.slice("/api/products/".length)));
-      if (url.pathname === "/api/sales/reps" && request.method === "POST") return createSalesRep(request, env);
-      if (url.pathname === "/api/sales/reps" && request.method === "GET") return listSalesReps(env);
+      if (url.pathname === "/api/sales/reps" && request.method === "POST") return await createSalesRep(request, env);
+      if (url.pathname === "/api/sales/reps" && request.method === "GET") return await listSalesReps(env);
       if (url.pathname === "/api/sales/bind" && (request.method === "POST" || request.method === "GET")) return bindCustomerToSalesRep(request, env);
       if (url.pathname === "/api/members/check-or-create" && request.method === "POST") return checkOrCreateMember(request, env);
       if (url.pathname === "/api/points/adjust" && request.method === "POST") return adjustMemberPoints(request, env);
@@ -88,7 +88,7 @@ export default {
       if (url.pathname === "/api/admin/smart-menu/projects" && request.method === "POST") return createSmartMenuProject(request, env);
       if (url.pathname === "/api/admin/smart-menu/projects/from-template" && request.method === "POST") return createSmartMenuProjectFromTemplate(request, env);
       if (url.pathname.startsWith("/api/admin/smart-menu/projects/")) return handleSmartMenuProjectRoute(request, env, url);
-      if (url.pathname === "/api/reports/monthly-sales" && request.method === "GET") return monthlySalesReport(request, env);
+      if (url.pathname === "/api/reports/monthly-sales" && request.method === "GET") return await monthlySalesReport(request, env);
 
       return json({ ok: false, error: "not_found", path: url.pathname }, 404);
     } catch (error) {
@@ -133,6 +133,70 @@ function parseJson(text, fallback = null) {
 
 function requireDb(env) {
   if (!env.DB) throw new HttpError(500, "d1_binding_missing");
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let index = 0; index < bytes.byteLength; index += 1) binary += String.fromCharCode(bytes[index]);
+  return btoa(binary);
+}
+
+function workerPublicBase(env) {
+  return String(env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev").replace(/\/+$/, "");
+}
+
+function motherMemberBaseUrl(env) {
+  return String(env.MEMBER_CENTER_URL || env.MOTHER_MEMBER_URL || env.MOTHER_WEBHOOK_URL || "https://aiwe.cc/index.php/line_login/10279/").trim();
+}
+
+function buildSalesInviteUrl(env, salesCode) {
+  const url = new URL(motherMemberBaseUrl(env));
+  const code = normalizeSalesCode(salesCode || "");
+  if (code) url.searchParams.set("sales", code);
+  url.searchParams.set("source", "sales_qr");
+  const bindUrl = new URL(`${workerPublicBase(env)}/api/sales/bind`);
+  if (code) bindUrl.searchParams.set("sales", code);
+  bindUrl.searchParams.set("source", "mother_site");
+  url.searchParams.set("gusys_bind", bindUrl.toString());
+  return url.toString();
+}
+
+function buildQrUrl(inviteUrl) {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=18&data=${encodeURIComponent(inviteUrl)}`;
+}
+
+function makeSalesCode(name) {
+  const base = String(name || "SALES")
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9]/g, "")
+    .slice(0, 10)
+    .toUpperCase() || "SALES";
+  const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
+  return `${base}-${suffix}`;
+}
+
+function normalizeSalesCode(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^A-Za-z0-9_-]/g, "")
+    .toUpperCase()
+    .slice(0, 40);
+}
+
+function currentPeriod() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function nextPeriodStart(period) {
+  const match = String(period || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return new Date().toISOString();
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const next = month === 12
+    ? new Date(Date.UTC(year + 1, 0, 1))
+    : new Date(Date.UTC(year, month, 1));
+  return next.toISOString();
 }
 
 async function handleLineWebhook(request, env, ctx) {
@@ -4972,21 +5036,32 @@ async function monthlySalesReport(request, env) {
   const end = nextPeriodStart(period);
 
   const { results } = await env.DB.prepare(`
+    WITH order_costs AS (
+      SELECT
+        oi.order_id AS orderId,
+        COALESCE(SUM(oi.quantity * COALESCE(p.cost, 0)), 0) AS costAmount
+      FROM order_items oi
+      LEFT JOIN products p ON p.id = oi.product_id
+      GROUP BY oi.order_id
+    )
     SELECT
       sr.id AS salesRepId,
       sr.sales_code AS salesCode,
       sr.name AS salesName,
       COUNT(o.id) AS orderCount,
-      COALESCE(SUM(o.total), 0) AS totalAmount
+      COALESCE(SUM(o.total), 0) AS totalAmount,
+      COALESCE(SUM(o.total), 0) AS revenue,
+      COALESCE(SUM(o.total - COALESCE(oc.costAmount, 0)), 0) AS grossProfit
     FROM sales_reps sr
     LEFT JOIN orders o
       ON o.sales_rep_id = sr.id
       AND o.ordered_at >= ?
       AND o.ordered_at < ?
       AND o.status <> 'cancelled'
+    LEFT JOIN order_costs oc ON oc.orderId = o.id
     WHERE sr.status = 'active'
     GROUP BY sr.id, sr.sales_code, sr.name
-    ORDER BY totalAmount DESC, orderCount DESC, sr.name ASC
+    ORDER BY revenue DESC, orderCount DESC, sr.name ASC
   `).bind(start, end).all();
 
   return json({ ok: true, period, data: results || [] });
