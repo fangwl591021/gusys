@@ -3899,14 +3899,30 @@ async function analyzeSmartMenuImage(request, env) {
   });
   const body = await aiRes.json().catch(() => ({}));
   if (!aiRes.ok) {
+    const errorCode = String(body?.error?.code || body?.error?.type || `HTTP_${aiRes.status}`);
+    const errorMessage = String(body?.error?.message || "");
+    const creditExhausted = errorCode === "credit_balance_exhausted"
+      || errorCode === "insufficient_quota"
+      || /no credits remaining|credit balance|billing/i.test(errorMessage);
     await recordSmartMenuAiUsage(env, {
       provider: "openai",
       model,
-      status: "failed",
+      status: creditExhausted ? "fallback" : "failed",
       body,
       latencyMs: Date.now() - startedAt,
-      errorCode: body?.error?.code || `HTTP_${aiRes.status}`,
+      errorCode,
     }).catch(() => {});
+    if (creditExhausted) {
+      return json({
+        ok: true,
+        success: true,
+        provider: "fallback",
+        model,
+        fallbackReason: errorCode,
+        areas: defaultSmartMenuAreas(),
+        notes: ["OpenAI API 額度已用完，已載入六格備援熱區。這不是 AI 辨識結果，請人工確認座標與 Action。"],
+      });
+    }
     return json({ ok: false, success: false, error: body?.error?.message || "AI 圖片分析失敗" }, 500);
   }
   await recordSmartMenuAiUsage(env, {
