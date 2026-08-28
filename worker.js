@@ -72,8 +72,14 @@ export default {
       if (url.pathname === "/api/admin/rich-menus" && request.method === "DELETE") return deleteRichMenu(request, env);
       if (url.pathname === "/api/admin/rich-menus/deploy" && request.method === "POST") return deployRichMenu(request, env);
       if (url.pathname.startsWith("/api/admin/smart-menu/assets/") && request.method === "GET") return getSmartMenuAsset(request, env, decodeURIComponent(url.pathname.slice("/api/admin/smart-menu/assets/".length)));
+      if (url.pathname === "/api/admin/smart-menu/analyze-image" && request.method === "POST") return analyzeSmartMenuImage(request, env);
+      if (url.pathname === "/api/admin/smart-menu/templates/upload-image" && request.method === "POST") return uploadSmartMenuTemplateImage(request, env);
+      if (url.pathname === "/api/admin/smart-menu/templates" && request.method === "GET") return listSmartMenuTemplates(request, env);
+      if (url.pathname === "/api/admin/smart-menu/templates" && request.method === "POST") return createSmartMenuTemplate(request, env);
+      if (url.pathname.startsWith("/api/admin/smart-menu/templates/")) return handleSmartMenuTemplateRoute(request, env, url);
       if (url.pathname === "/api/admin/smart-menu/projects" && request.method === "GET") return listSmartMenuProjects(request, env);
       if (url.pathname === "/api/admin/smart-menu/projects" && request.method === "POST") return createSmartMenuProject(request, env);
+      if (url.pathname === "/api/admin/smart-menu/projects/from-template" && request.method === "POST") return createSmartMenuProjectFromTemplate(request, env);
       if (url.pathname.startsWith("/api/admin/smart-menu/projects/")) return handleSmartMenuProjectRoute(request, env, url);
       if (url.pathname === "/api/reports/monthly-sales" && request.method === "GET") return monthlySalesReport(request, env);
 
@@ -2704,14 +2710,14 @@ function renderSmartMenuStudioPage() {
     *{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--soft);color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer}
     .shell{height:100vh;display:grid;grid-template-rows:auto 1fr;overflow:hidden}.topbar{background:#fff;border-bottom:1px solid var(--border);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:16px}.title{display:flex;align-items:center;gap:10px}.title-icon{width:38px;height:38px;border-radius:12px;background:#ecfdf3;color:#047857;display:grid;place-items:center;font-weight:950}.title h1{font-size:22px;margin:0;font-weight:950}.title p{margin:2px 0 0;color:var(--muted);font-weight:800;font-size:13px}.top-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.btn{border:1px solid var(--border);background:#fff;color:#334155;border-radius:10px;padding:10px 13px;font-weight:900;display:inline-flex;align-items:center;gap:7px}.btn:hover{background:#f8fafc}.btn-green{background:var(--line);border-color:#06b34d;color:#fff}.btn-blue{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}.btn-orange{background:#fff7ed;border-color:#fed7aa;color:#c2410c}.btn-red{background:#fff1f2;border-color:#fecdd3;color:#be123c}.token{width:190px}
     .workspace{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:0}.editor{min-width:0;overflow:auto;padding:18px;display:grid;gap:16px}.side{border-left:1px solid var(--border);background:#fff;overflow:auto;padding:16px;display:grid;align-content:start;gap:14px}.panel{background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.04);overflow:hidden}.panel-head{padding:14px 16px;border-bottom:1px solid #eef2f7;display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-title{font-size:16px;font-weight:950;display:flex;align-items:center;gap:8px}.panel-body{padding:16px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.field{display:grid;gap:6px}.field.full{grid-column:1/-1}.label{font-size:12px;color:var(--muted);font-weight:900}.input{width:100%;border:1px solid #cbd5e1;border-radius:10px;background:#fff;padding:10px 12px;font-weight:850;color:#0f172a}.input:focus{outline:none;border-color:#06c755;box-shadow:0 0 0 3px rgba(6,199,85,.12)}textarea.input{min-height:78px;resize:vertical}.status{min-height:20px;color:var(--muted);font-size:13px;font-weight:850}.status.err{color:var(--danger)}.status.ok{color:#047857}.badge{display:inline-flex;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:950;background:#f1f5f9;color:#475569}.badge.default{background:#dcfce7;color:#047857}.badge.published{background:#eff6ff;color:#1d4ed8}.badge.disabled{background:#fee2e2;color:#b91c1c}.badge.draft{background:#fff7ed;color:#c2410c}
-    .canvas-wrap{display:grid;grid-template-columns:minmax(360px,740px) minmax(280px,1fr);gap:16px;align-items:start}.canvas-card{background:#e9eef5;border-radius:14px;padding:18px;display:grid;place-items:center;min-height:360px}.canvas{width:100%;aspect-ratio:2500/1686;background:#f8fafc center/cover no-repeat;border:2px solid #172033;border-radius:16px;position:relative;overflow:hidden;box-shadow:0 14px 30px rgba(15,23,42,.14)}.canvas.empty{display:grid;place-items:center;color:#94a3b8;font-size:18px;font-weight:950}.area-box{position:absolute;border:2px solid rgba(37,99,235,.8);background:rgba(37,99,235,.16);display:flex;align-items:center;justify-content:center;text-align:center;color:#0f172a;font-weight:950;font-size:13px;line-height:1.25;padding:4px}.area-box.active{border-color:#06c755;background:rgba(6,199,85,.22);box-shadow:0 0 0 3px rgba(6,199,85,.16)}.areas-list{display:grid;gap:8px;max-height:360px;overflow:auto}.area-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;border:1px solid var(--border);border-radius:10px;background:#fff;padding:10px;text-align:left}.area-row.active{border-color:#06c755;background:#f0fdf4}.area-main{font-weight:950}.area-sub{font-size:12px;color:#64748b;margin-top:2px}.project-list{display:grid;gap:10px}.project-card{border:1px solid var(--border);border-radius:13px;background:#fff;padding:10px;display:grid;grid-template-columns:86px 1fr;gap:10px;align-items:center;text-align:left}.project-card.active{border-color:#06c755;box-shadow:0 0 0 3px rgba(6,199,85,.12)}.thumb{height:58px;border-radius:10px;background:#eef2f7 center/cover no-repeat;display:grid;place-items:center;color:#94a3b8;font-weight:950;overflow:hidden}.project-name{font-weight:950;line-height:1.25}.project-meta{font-size:12px;color:var(--muted);font-weight:800;margin-top:4px;word-break:break-all}.empty-list{padding:22px;border:1px dashed #cbd5e1;border-radius:12px;text-align:center;color:#94a3b8;font-weight:900}.danger-zone{display:flex;gap:8px;flex-wrap:wrap}.small{font-size:12px;padding:7px 9px;border-radius:8px}.json-box{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;white-space:pre-wrap;background:#0f172a;color:#dbeafe;border-radius:12px;padding:12px;max-height:220px;overflow:auto}
+    .canvas-wrap{display:grid;grid-template-columns:minmax(360px,740px) minmax(280px,1fr);gap:16px;align-items:start}.canvas-card{background:#e9eef5;border-radius:14px;padding:18px;display:grid;place-items:center;min-height:360px}.canvas{width:100%;aspect-ratio:2500/1686;background:#f8fafc center/cover no-repeat;border:2px solid #172033;border-radius:16px;position:relative;overflow:hidden;box-shadow:0 14px 30px rgba(15,23,42,.14)}.canvas.empty{display:grid;place-items:center;color:#94a3b8;font-size:18px;font-weight:950}.area-box{position:absolute;border:2px solid rgba(37,99,235,.8);background:rgba(37,99,235,.16);display:flex;align-items:center;justify-content:center;text-align:center;color:#0f172a;font-weight:950;font-size:13px;line-height:1.25;padding:4px}.area-box.active{border-color:#06c755;background:rgba(6,199,85,.22);box-shadow:0 0 0 3px rgba(6,199,85,.16)}.areas-list{display:grid;gap:8px;max-height:360px;overflow:auto}.area-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;border:1px solid var(--border);border-radius:10px;background:#fff;padding:10px;text-align:left}.area-row.active{border-color:#06c755;background:#f0fdf4}.area-main{font-weight:950}.area-sub{font-size:12px;color:#64748b;margin-top:2px}.project-list,.template-list{display:grid;gap:10px}.project-card,.template-card{border:1px solid var(--border);border-radius:13px;background:#fff;padding:10px;display:grid;grid-template-columns:86px 1fr;gap:10px;align-items:center;text-align:left}.project-card.active,.template-card.active{border-color:#06c755;box-shadow:0 0 0 3px rgba(6,199,85,.12)}.thumb{height:58px;border-radius:10px;background:#eef2f7 center/cover no-repeat;display:grid;place-items:center;color:#94a3b8;font-weight:950;overflow:hidden}.project-name{font-weight:950;line-height:1.25}.project-meta{font-size:12px;color:var(--muted);font-weight:800;margin-top:4px;word-break:break-all}.empty-list{padding:22px;border:1px dashed #cbd5e1;border-radius:12px;text-align:center;color:#94a3b8;font-weight:900}.danger-zone{display:flex;gap:8px;flex-wrap:wrap}.small{font-size:12px;padding:7px 9px;border-radius:8px}.json-box{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;white-space:pre-wrap;background:#0f172a;color:#dbeafe;border-radius:12px;padding:12px;max-height:220px;overflow:auto}.studio-tabs{display:flex;gap:8px;flex-wrap:wrap}.studio-tab{border:1px solid var(--border);border-radius:999px;background:#fff;padding:9px 13px;font-weight:950}.studio-tab.active{background:#0f172a;color:#fff;border-color:#0f172a}.guide-list{display:grid;gap:8px}.guide-item{border:1px solid #dbe3ee;border-radius:10px;padding:10px;background:#fff;font-weight:850}.guide-item.blocking{border-color:#fecaca;background:#fff1f2;color:#991b1b}.guide-item.warning{border-color:#fed7aa;background:#fff7ed;color:#9a3412}.progress{height:10px;border-radius:999px;background:#e2e8f0;overflow:hidden}.progress>span{display:block;height:100%;background:var(--line);width:0}.template-workflow{display:grid;grid-template-columns:minmax(280px,1fr) minmax(280px,1fr);gap:14px}.template-preview{background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:12px;display:grid;gap:8px}.studio-help{color:#64748b;font-weight:850;font-size:13px;line-height:1.55}
     @media(max-width:1100px){.workspace{grid-template-columns:1fr}.side{border-left:0;border-top:1px solid var(--border)}.canvas-wrap{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}}@media(max-width:640px){.topbar{align-items:flex-start;flex-direction:column}.top-actions{width:100%}.token{width:100%}.btn{flex:1;justify-content:center}.grid{grid-template-columns:1fr}.editor{padding:12px}.side{padding:12px}}
   </style>
 </head>
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="title"><div class="title-icon">RM</div><div><h1>Gusys Smart Menu Studio</h1><p>移植 Smart-Menu-Studio：專案縮圖、熱區 Action、Alias、發布與預設選單</p></div></div>
+      <div class="title"><div class="title-icon">AI</div><div><h1>Gusys Smart Menu Studio</h1><p>智能圖文選單：模板庫、AI 視覺偵測、Smart Guide、Alias、發布與預設選單</p></div></div>
       <div class="top-actions">
         <input id="adminTokenInput" class="input token" type="password" placeholder="Admin token">
         <button id="saveTokenBtn" class="btn">儲存 token</button>
@@ -2738,6 +2744,50 @@ function renderSmartMenuStudioPage() {
               <button id="toggleProjectBtn" class="btn">停用 / 啟用</button>
             </div>
             <div id="statusText" class="status" style="margin-top:10px"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Smart-Menu-Studio 智能工作流</div>
+            <div class="studio-tabs">
+              <button class="studio-tab active" data-studio-tab="guide">Smart Guide</button>
+              <button class="studio-tab" data-studio-tab="template">模板 Builder</button>
+              <button class="studio-tab" data-studio-tab="project">從模板建立</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div id="guidePanel" class="studio-panel">
+              <div class="progress"><span id="guideProgress"></span></div>
+              <div id="guideSummary" class="studio-help" style="margin-top:10px"></div>
+              <div id="guideList" class="guide-list" style="margin-top:12px"></div>
+              <button id="reloadGuideBtn" class="btn btn-blue" style="margin-top:12px">重新檢查</button>
+            </div>
+            <div id="templatePanel" class="studio-panel" style="display:none">
+              <div class="template-workflow">
+                <div class="template-preview">
+                  <label class="field"><span class="label">模板名稱</span><input id="templateName" class="input" value="Gusys 智能選單模板"></label>
+                  <label class="field"><span class="label">上傳設計底圖</span><input id="templateImageFile" class="input" type="file" accept="image/png,image/jpeg"></label>
+                  <div class="studio-help">來源流程：上傳底圖後，AI 只分析一次熱區，座標存成模板，之後專案直接複製模板快照。</div>
+                  <div class="danger-zone">
+                    <button id="analyzeTemplateBtn" class="btn btn-blue">AI 偵測熱區</button>
+                    <button id="saveTemplateBtn" class="btn btn-green">儲存為模板</button>
+                  </div>
+                  <div id="templateStatus" class="status"></div>
+                </div>
+                <div>
+                  <div class="label" style="margin-bottom:8px">模板熱區</div>
+                  <div id="detectedAreasList" class="areas-list"></div>
+                </div>
+              </div>
+            </div>
+            <div id="projectPanel" class="studio-panel" style="display:none">
+              <div class="grid">
+                <label class="field"><span class="label">選擇模板</span><select id="templateSelect" class="input"></select></label>
+                <label class="field"><span class="label">新專案名稱</span><input id="projectFromTemplateName" class="input" placeholder="例如：會員首頁圖文選單"></label>
+                <label class="field"><span class="label">ChatBar 文字</span><input id="projectFromTemplateChatBar" class="input" value="選單" maxlength="14"></label>
+                <div class="field"><span class="label">&nbsp;</span><button id="createFromTemplateBtn" class="btn btn-green">從模板建立專案</button></div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="canvas-wrap">
@@ -2787,12 +2837,19 @@ function renderSmartMenuStudioPage() {
             <div class="danger-zone"><button id="deleteProjectBtn" class="btn btn-red small">刪除目前專案</button></div>
           </div>
         </div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">模板庫</div></div>
+          <div class="panel-body"><div id="templateList" class="template-list"></div></div>
+        </div>
       </aside>
     </main>
   </div>
   <script>
     var projects = [];
+    var templates = [];
     var activeProject = null;
+    var templateAsset = null;
+    var detectedAreas = [];
     var selectedAreaIndex = 0;
     var adminToken = localStorage.getItem("gusys_admin_token") || "";
     var canvasW = 2500;
@@ -2831,6 +2888,7 @@ function renderSmartMenuStudioPage() {
     async function loadProjects(){
       setStatus("讀取 Smart Menu 專案中");
       q("#adminTokenInput").value = adminToken;
+      await loadTemplates().catch(function(err){ q("#templateStatus").textContent = err.message; });
       var list = await api("/api/admin/smart-menu/projects");
       projects = Array.isArray(list) ? list : [];
       if(!projects.length){
@@ -2845,6 +2903,7 @@ function renderSmartMenuStudioPage() {
       activeProject = normalizeProject(await api("/api/admin/smart-menu/projects/" + encodeURIComponent(id)));
       selectedAreaIndex = 0;
       renderAll();
+      loadGuide().catch(function(err){ renderGuideError(err.message); });
     }
     function renderProjectList(){
       var html = projects.map(function(p){
@@ -2962,6 +3021,103 @@ function renderSmartMenuStudioPage() {
       };
     }
     function renderPayload(){ q("#payloadPreview").textContent = JSON.stringify(buildPayloadPreview(), null, 2); }
+    function setStudioTab(name){
+      qa(".studio-tab").forEach(function(btn){ btn.classList.toggle("active", btn.getAttribute("data-studio-tab") === name); });
+      q("#guidePanel").style.display = name === "guide" ? "block" : "none";
+      q("#templatePanel").style.display = name === "template" ? "block" : "none";
+      q("#projectPanel").style.display = name === "project" ? "block" : "none";
+    }
+    function renderDetectedAreas(){
+      q("#detectedAreasList").innerHTML = detectedAreas.map(function(area,index){
+        var action = area.action || {};
+        return '<div class="area-row"><div><div class="area-main">'+esc(area.label || ("區塊 " + (index+1)))+'</div><div class="area-sub">'+Math.round(area.x)+','+Math.round(area.y)+' / '+Math.round(area.width)+'x'+Math.round(area.height)+' / '+esc(action.type || "message")+'</div></div><span class="badge">'+(index+1)+'</span></div>';
+      }).join("") || '<div class="empty-list">尚未偵測熱區</div>';
+    }
+    async function loadTemplates(){
+      var data = await api("/api/admin/smart-menu/templates");
+      templates = Array.isArray(data.templates) ? data.templates : (Array.isArray(data) ? data : []);
+      renderTemplateList();
+      renderTemplateSelect();
+    }
+    function renderTemplateList(){
+      q("#templateList").innerHTML = templates.map(function(t){
+        var thumb = t.imageDataUrl ? 'style="background-image:url('+esc(t.imageDataUrl)+')"' : "";
+        return '<div class="template-card" data-template-card="'+esc(t.id)+'"><div class="thumb" '+thumb+'>'+(t.imageDataUrl?'':'TPL')+'</div><div><div class="project-name">'+esc(t.name || "未命名模板")+'</div><div class="project-meta">'+esc(t.industry || "LINE OA")+' / '+(t.areaCount || 0)+' 個熱區</div><div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button class="btn small btn-blue" data-use-template="'+esc(t.id)+'">建立專案</button><button class="btn small btn-red" data-delete-template="'+esc(t.id)+'">刪除</button></div></div></div>';
+      }).join("") || '<div class="empty-list">尚無模板。請到模板 Builder 上傳底圖並 AI 偵測。</div>';
+      qa("[data-use-template]").forEach(function(btn){ btn.onclick=function(){ q("#templateSelect").value = btn.getAttribute("data-use-template"); setStudioTab("project"); }; });
+      qa("[data-delete-template]").forEach(function(btn){ btn.onclick=function(){ deleteTemplate(btn.getAttribute("data-delete-template")).catch(function(err){ q("#templateStatus").textContent = err.message; }); }; });
+    }
+    function renderTemplateSelect(){
+      q("#templateSelect").innerHTML = templates.map(function(t){ return '<option value="'+esc(t.id)+'">'+esc(t.name || t.id)+'</option>'; }).join("") || '<option value="">尚無模板</option>';
+    }
+    function handleTemplateImageUpload(file){
+      if(!file) return;
+      var reader = new FileReader();
+      reader.onload = async function(event){
+        try{
+          q("#templateStatus").textContent = "模板圖片上傳中";
+          var result = await api("/api/admin/smart-menu/templates/upload-image", {method:"POST",body:JSON.stringify({filename:file.name,imageDataUrl:event.target.result})});
+          templateAsset = result.asset || result;
+          detectedAreas = [];
+          renderDetectedAreas();
+          q("#templateStatus").textContent = "圖片已上傳，可執行 AI 偵測";
+        }catch(err){ q("#templateStatus").textContent = err.message; }
+      };
+      reader.readAsDataURL(file);
+    }
+    async function analyzeTemplateImage(){
+      if(!templateAsset || !templateAsset.imageDataUrl) throw new Error("請先上傳模板底圖。");
+      q("#templateStatus").textContent = "AI 視覺分析中... 正在尋找按鈕區塊";
+      var result = await api("/api/admin/smart-menu/analyze-image", {method:"POST",body:JSON.stringify({imageDataUrl:templateAsset.imageDataUrl})});
+      detectedAreas = Array.isArray(result.areas) ? result.areas : [];
+      renderDetectedAreas();
+      q("#templateStatus").textContent = "AI 偵測完成：" + detectedAreas.length + " 個熱區";
+    }
+    async function saveTemplate(){
+      if(!templateAsset || !templateAsset.id) throw new Error("請先上傳模板底圖。");
+      if(!detectedAreas.length) detectedAreas = defaultAreas();
+      q("#templateStatus").textContent = "模板儲存中";
+      var result = await api("/api/admin/smart-menu/templates", {method:"POST",body:JSON.stringify({name:q("#templateName").value.trim() || "Gusys 智能選單模板",industry:"LINE OA",assetId:templateAsset.id,areas:detectedAreas,aiProvider:"openai",aiModel:"vision"})});
+      await loadTemplates();
+      q("#templateStatus").textContent = "模板已儲存：" + (result.template && result.template.name ? result.template.name : "");
+    }
+    async function deleteTemplate(id){
+      if(!id || !confirm("刪除此模板？")) return;
+      await api("/api/admin/smart-menu/templates/" + encodeURIComponent(id), {method:"DELETE"});
+      await loadTemplates();
+      q("#templateStatus").textContent = "模板已刪除";
+    }
+    async function createProjectFromTemplate(){
+      var templateId = q("#templateSelect").value;
+      if(!templateId) throw new Error("請先建立或選擇模板。");
+      setStatus("從模板建立專案中");
+      activeProject = normalizeProject(await api("/api/admin/smart-menu/projects/from-template", {method:"POST",body:JSON.stringify({templateId:templateId,name:q("#projectFromTemplateName").value.trim(),chatBarText:q("#projectFromTemplateChatBar").value.trim() || "選單"})}));
+      await refreshProjectListOnly();
+      renderAll();
+      setStudioTab("guide");
+      await loadGuide();
+      setStatus("已從模板建立專案", "ok");
+    }
+    async function loadGuide(){
+      if(!activeProject) return;
+      var result = await api("/api/admin/smart-menu/projects/" + encodeURIComponent(activeProject.id) + "/guide");
+      renderGuide(result.guide || result);
+    }
+    function renderGuide(guide){
+      var progress = guide && guide.progress ? guide.progress : {percent:0,completed:0,total:5};
+      q("#guideProgress").style.width = Math.max(0, Math.min(100, Number(progress.percent || 0))) + "%";
+      q("#guideSummary").textContent = (guide.nextAction && guide.nextAction.message) || "尚無 Guide 結果。";
+      var issues = Array.isArray(guide.issues) ? guide.issues : [];
+      var recs = Array.isArray(guide.recommendations) ? guide.recommendations : [];
+      var rows = issues.map(function(issue){ return '<div class="guide-item '+esc(issue.severity || "warning")+'">'+esc(issue.message || issue.code)+'</div>'; });
+      rows = rows.concat(recs.map(function(rec){ return '<div class="guide-item">'+esc(rec)+'</div>'; }));
+      q("#guideList").innerHTML = rows.join("") || '<div class="guide-item">基本設定已完成，可發布或設為首頁。</div>';
+    }
+    function renderGuideError(message){
+      q("#guideProgress").style.width = "0%";
+      q("#guideSummary").textContent = message || "Guide 讀取失敗";
+      q("#guideList").innerHTML = '<div class="guide-item warning">'+esc(message || "Guide 讀取失敗")+'</div>';
+    }
     async function saveProject(){
       if(!activeProject) return;
       activeProject.name = q("#projectName").value.trim() || "Gusys 圖文選單";
@@ -3054,6 +3210,12 @@ function renderSmartMenuStudioPage() {
       q("#addAreaBtn").onclick = addArea;
       q("#deleteAreaBtn").onclick = deleteArea;
       q("#imageFile").onchange = function(e){ handleImageUpload(e.target.files && e.target.files[0]); };
+      qa(".studio-tab").forEach(function(btn){ btn.onclick = function(){ setStudioTab(btn.getAttribute("data-studio-tab")); }; });
+      q("#templateImageFile").onchange = function(e){ handleTemplateImageUpload(e.target.files && e.target.files[0]); };
+      q("#analyzeTemplateBtn").onclick = function(){ analyzeTemplateImage().catch(function(err){ q("#templateStatus").textContent = err.message; }); };
+      q("#saveTemplateBtn").onclick = function(){ saveTemplate().catch(function(err){ q("#templateStatus").textContent = err.message; }); };
+      q("#createFromTemplateBtn").onclick = function(){ createProjectFromTemplate().catch(function(err){ setStatus(err.message,"err"); }); };
+      q("#reloadGuideBtn").onclick = function(){ loadGuide().catch(function(err){ renderGuideError(err.message); }); };
       ["#projectName","#chatBarText"].forEach(function(sel){ q(sel).oninput = renderPayload; });
       ["#areaLabel","#actionType","#areaX","#areaY","#areaW","#areaH","#actionUri","#actionText","#actionData","#actionDisplayText","#targetPageId"].forEach(function(sel){ q(sel).oninput = syncAreaFromForm; q(sel).onchange = syncAreaFromForm; });
     }
@@ -3450,12 +3612,46 @@ function smartMenuPublicProject(row) {
   };
 }
 
+function smartMenuPublicTemplate(row) {
+  return {
+    id: row.id,
+    name: row.name || "",
+    industry: row.industry || "",
+    status: row.status || "draft",
+    assetId: row.assetId || row.asset_id || "",
+    pageCount: Number(row.pageCount || row.page_count || 1),
+    areaCount: Number(row.areaCount || row.area_count || 0),
+    aiProvider: row.aiProvider || row.ai_provider || "",
+    aiModel: row.aiModel || row.ai_model || "",
+    createdAt: row.createdAt || row.created_at || "",
+    updatedAt: row.updatedAt || row.updated_at || "",
+    imageUrl: (row.assetId || row.asset_id) ? `/api/admin/smart-menu/assets/${encodeURIComponent(row.assetId || row.asset_id)}` : null,
+    imageDataUrl: row.imageDataUrl || row.image_data_url || "",
+  };
+}
+
 function normalizeSmartMenuArea(area, index, projectId) {
   const action = normalizeSmartMenuAction(area.action || area);
   const safeIndex = Math.max(0, Math.floor(toNum(area.areaIndex ?? area.area_index ?? index, index)));
   return {
     id: String(area.id || smartMenuId("area")).trim(),
     projectId,
+    areaIndex: safeIndex,
+    label: String(area.label || `區塊 ${safeIndex + 1}`).trim().slice(0, 80),
+    x: Math.max(0, Math.round(toNum(area.x, 0))),
+    y: Math.max(0, Math.round(toNum(area.y, 0))),
+    width: Math.max(1, Math.round(toNum(area.width, 1))),
+    height: Math.max(1, Math.round(toNum(area.height, 1))),
+    action,
+  };
+}
+
+function normalizeSmartMenuTemplateArea(area, index, templateId) {
+  const action = normalizeSmartMenuAction(area.action || area);
+  const safeIndex = Math.max(0, Math.floor(toNum(area.areaIndex ?? area.area_index ?? index, index)));
+  return {
+    id: String(area.id || smartMenuId("tarea")).trim(),
+    templateId,
     areaIndex: safeIndex,
     label: String(area.label || `區塊 ${safeIndex + 1}`).trim().slice(0, 80),
     x: Math.max(0, Math.round(toNum(area.x, 0))),
@@ -3486,6 +3682,374 @@ function buildSmartMenuLineAction(action) {
   return { type: "richmenuswitch", richMenuAliasId: normalized.richMenuAliasId, data: normalized.data || "switch=1" };
 }
 
+function extractSmartMenuAiText(payload) {
+  if (typeof payload?.output_text === "string") return payload.output_text;
+  const chunks = [];
+  for (const item of payload?.output || []) {
+    for (const content of item?.content || []) {
+      if (typeof content?.text === "string") chunks.push(content.text);
+      if (typeof content?.output_text === "string") chunks.push(content.output_text);
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+function parseSmartMenuAiJson(text) {
+  const cleaned = String(text || "").replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("AI 回傳內容不是 JSON");
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+function normalizeDetectedSmartMenuAreas(areas) {
+  return (Array.isArray(areas) && areas.length ? areas : defaultSmartMenuAreas()).slice(0, 20).map((area, index) => {
+    const normalized = normalizeSmartMenuTemplateArea({
+      ...area,
+      action: area.action || {
+        type: String(area.actionType || "message").toLowerCase(),
+        text: area.text || area.label || "",
+        uri: area.uri || "",
+        data: area.data || "",
+      },
+    }, index, "");
+    return {
+      id: index + 1,
+      label: normalized.label,
+      x: normalized.x,
+      y: normalized.y,
+      width: normalized.width,
+      height: normalized.height,
+      action: normalized.action,
+    };
+  });
+}
+
+async function analyzeSmartMenuImage(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const imageDataUrl = String(payload.imageDataUrl || payload.image || "").trim();
+  const image = parseDataUrlImage(imageDataUrl);
+  if (!image) return json({ ok: false, success: false, error: "請先上傳 JPG 或 PNG 圖文選單底圖。" }, 400);
+  if (!String(env.OPENAI_API_KEY || "").trim()) {
+    return json({
+      ok: true,
+      success: true,
+      provider: "fallback",
+      model: "",
+      areas: defaultSmartMenuAreas(),
+      notes: ["OPENAI_API_KEY 未設定，已套用 6 格預設熱區。"],
+    });
+  }
+  const prompt = [
+    "你是 LINE 官方帳號 Rich Menu 專業座標分析器。",
+    "請分析圖片中的可點擊功能區塊。整張圖片固定換算為 2500x1686，左上角為 0,0。",
+    "回傳 JSON，格式只能是 {\"areas\":[{\"label\":\"\",\"x\":0,\"y\":0,\"width\":0,\"height\":0,\"action\":{\"type\":\"message\",\"text\":\"\"}}],\"notes\":[] }。",
+    "座標需為整數，區塊不得超界。label 使用繁體中文。action 優先使用 message，若明顯是外部網址才用 uri。",
+    "不要輸出 Markdown，不要輸出 JSON 以外內容。",
+  ].join("\n");
+  const model = String(env.SMART_MENU_AI_MODEL || env.AI_MONITOR_MODEL || "gpt-4.1-mini").trim();
+  const aiRes = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${String(env.OPENAI_API_KEY).trim()}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: [{
+        role: "user",
+        content: [
+          { type: "input_text", text: prompt },
+          { type: "input_image", image_url: imageDataUrl },
+        ],
+      }],
+      temperature: 0.1,
+    }),
+  });
+  const body = await aiRes.json().catch(() => ({}));
+  if (!aiRes.ok) return json({ ok: false, success: false, error: body?.error?.message || "AI 圖片分析失敗" }, 500);
+  const parsed = parseSmartMenuAiJson(extractSmartMenuAiText(body));
+  return json({
+    ok: true,
+    success: true,
+    provider: "openai",
+    model,
+    areas: normalizeDetectedSmartMenuAreas(parsed.areas),
+    notes: Array.isArray(parsed.notes) ? parsed.notes.map(item => String(item || "")).filter(Boolean) : [],
+  });
+}
+
+async function handleSmartMenuTemplateRoute(request, env, url) {
+  const suffix = url.pathname.slice("/api/admin/smart-menu/templates/".length);
+  const parts = suffix.split("/").map(part => decodeURIComponent(part)).filter(Boolean);
+  const templateId = parts[0] || "";
+  if (!templateId) return json({ ok: false, error: "missing_template_id" }, 400);
+  if (request.method === "GET") return getSmartMenuTemplate(request, env, templateId);
+  if (request.method === "PATCH") return updateSmartMenuTemplate(request, env, templateId);
+  if (request.method === "DELETE") return deleteSmartMenuTemplate(request, env, templateId);
+  return json({ ok: false, error: "not_found", path: url.pathname }, 404);
+}
+
+async function uploadSmartMenuTemplateImage(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const imageDataUrl = String(payload.imageDataUrl || payload.image || "").trim();
+  const image = parseDataUrlImage(imageDataUrl);
+  if (!image) return json({ ok: false, success: false, error: "invalid_image_data_url" }, 400);
+  if (image.bytes.length > 10 * 1024 * 1024) return json({ ok: false, success: false, error: "image_too_large" }, 400);
+  const assetId = smartMenuId("asset");
+  await env.DB.prepare(`
+    INSERT INTO smart_menu_assets (
+      id, workspace_id, image_data_url, original_filename, content_type, size_bytes, width, height, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 2500, 1686, 'active', datetime('now'))
+  `).bind(assetId, smartMenuWorkspaceId(), imageDataUrl, String(payload.filename || "template.png").slice(0, 180), image.contentType, image.bytes.length).run();
+  return json({ ok: true, success: true, asset: { id: assetId, imageUrl: `/api/admin/smart-menu/assets/${assetId}`, imageDataUrl } });
+}
+
+async function listSmartMenuTemplates(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const { results } = await env.DB.prepare(`
+    SELECT t.id, t.name, t.industry, t.status, t.asset_id AS assetId, t.area_count AS areaCount,
+           t.page_count AS pageCount, t.ai_provider AS aiProvider, t.ai_model AS aiModel,
+           t.created_at AS createdAt, t.updated_at AS updatedAt, a.image_data_url AS imageDataUrl
+    FROM smart_menu_templates t
+    LEFT JOIN smart_menu_assets a ON a.id = t.asset_id AND a.deleted_at IS NULL
+    WHERE t.workspace_id = ? AND t.deleted_at IS NULL
+    ORDER BY datetime(t.updated_at) DESC
+    LIMIT 100
+  `).bind(smartMenuWorkspaceId()).all();
+  return json({ ok: true, success: true, templates: (results || []).map(smartMenuPublicTemplate) });
+}
+
+async function createSmartMenuTemplate(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const workspaceId = smartMenuWorkspaceId();
+  const templateId = String(payload.id || smartMenuId("template")).trim();
+  const name = String(payload.name || "Gusys 智能選單模板").trim().slice(0, 300);
+  const assetId = String(payload.assetId || "").trim();
+  const areas = normalizeDetectedSmartMenuAreas(payload.areas);
+  if (!assetId) return json({ ok: false, success: false, error: "模板需要圖片 Asset。" }, 400);
+  await env.DB.prepare(`
+    INSERT INTO smart_menu_templates (
+      id, workspace_id, name, industry, status, asset_id, area_count, page_count, ai_provider, ai_model, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `).bind(
+    templateId,
+    workspaceId,
+    name,
+    String(payload.industry || "LINE OA").trim().slice(0, 120),
+    String(payload.status || "draft").trim().slice(0, 40),
+    assetId,
+    areas.length,
+    Math.max(1, Math.round(toNum(payload.pageCount, 1))),
+    String(payload.aiProvider || "").trim().slice(0, 60),
+    String(payload.aiModel || "").trim().slice(0, 120),
+  ).run();
+  await replaceSmartMenuTemplateAreas(env, workspaceId, templateId, areas);
+  const template = await loadSmartMenuTemplate(env, templateId);
+  return json({ ok: true, success: true, template });
+}
+
+async function getSmartMenuTemplate(request, env, templateId) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const template = await loadSmartMenuTemplate(env, templateId);
+  if (!template) return json({ ok: false, success: false, error: "template_not_found" }, 404);
+  return json({ ok: true, success: true, template });
+}
+
+async function updateSmartMenuTemplate(request, env, templateId) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const existing = await loadSmartMenuTemplate(env, templateId);
+  if (!existing) return json({ ok: false, success: false, error: "template_not_found" }, 404);
+  const workspaceId = smartMenuWorkspaceId();
+  const name = String(payload.name || existing.name || "Gusys 智能選單模板").trim().slice(0, 300);
+  const assetId = String(payload.assetId || existing.assetId || "").trim();
+  const areas = Array.isArray(payload.areas) ? normalizeDetectedSmartMenuAreas(payload.areas) : existing.areas;
+  await env.DB.prepare(`
+    UPDATE smart_menu_templates
+    SET name = ?, industry = ?, status = ?, asset_id = ?, area_count = ?, page_count = ?,
+        ai_provider = ?, ai_model = ?, updated_at = datetime('now')
+    WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL
+  `).bind(
+    name,
+    String(payload.industry || existing.industry || "").trim().slice(0, 120),
+    String(payload.status || existing.status || "draft").trim().slice(0, 40),
+    assetId,
+    areas.length,
+    Math.max(1, Math.round(toNum(payload.pageCount, existing.pageCount || 1))),
+    String(payload.aiProvider || existing.aiProvider || "").trim().slice(0, 60),
+    String(payload.aiModel || existing.aiModel || "").trim().slice(0, 120),
+    templateId,
+    workspaceId,
+  ).run();
+  await replaceSmartMenuTemplateAreas(env, workspaceId, templateId, areas);
+  const template = await loadSmartMenuTemplate(env, templateId);
+  return json({ ok: true, success: true, template });
+}
+
+async function deleteSmartMenuTemplate(request, env, templateId) {
+  requireAdmin(request, env);
+  requireDb(env);
+  await env.DB.prepare(`
+    UPDATE smart_menu_templates
+    SET deleted_at = datetime('now'), updated_at = datetime('now')
+    WHERE id = ? AND workspace_id = ?
+  `).bind(templateId, smartMenuWorkspaceId()).run();
+  return json({ ok: true, success: true, template: { id: templateId, deleted: true } });
+}
+
+async function createSmartMenuProjectFromTemplate(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const payload = await request.json().catch(() => ({}));
+  const templateId = String(payload.templateId || "").trim();
+  if (!templateId) return json({ ok: false, success: false, error: "templateId 不可空白。" }, 400);
+  const template = await loadSmartMenuTemplate(env, templateId);
+  if (!template) return json({ ok: false, success: false, error: "找不到指定模板。" }, 404);
+  if (!template.areas.length) return json({ ok: false, success: false, error: "此模板沒有可複製的熱區。" }, 400);
+  const workspaceId = smartMenuWorkspaceId();
+  const projectId = String(payload.id || smartMenuId("project")).trim();
+  const projectName = String(payload.name || `${template.name} - 新專案`).trim().slice(0, 300);
+  await env.DB.prepare(`
+    INSERT INTO smart_menu_projects (
+      id, workspace_id, template_id, name, status, asset_id, chat_bar_text, page_count, rich_menu_alias_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `).bind(projectId, workspaceId, templateId, projectName, template.assetId, String(payload.chatBarText || "選單").slice(0, 14), template.pageCount || 1, smartMenuAliasIdForProject(projectId)).run();
+  await replaceSmartMenuAreas(env, workspaceId, projectId, template.areas);
+  const project = await loadSmartMenuProject(env, projectId);
+  return json({ ok: true, success: true, project });
+}
+
+async function replaceSmartMenuTemplateAreas(env, workspaceId, templateId, areas) {
+  await env.DB.prepare(`DELETE FROM smart_menu_template_areas WHERE template_id = ? AND workspace_id = ?`).bind(templateId, workspaceId).run();
+  const normalized = (Array.isArray(areas) && areas.length ? areas : defaultSmartMenuAreas())
+    .slice(0, 20)
+    .map((area, index) => normalizeSmartMenuTemplateArea(area, index, templateId));
+  const statements = normalized.map(area => env.DB.prepare(`
+    INSERT INTO smart_menu_template_areas (
+      id, workspace_id, template_id, area_index, label, x, y, width, height,
+      action_type, action_uri, action_text, action_data, action_display_text, target_page_id,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `).bind(
+    area.id,
+    workspaceId,
+    templateId,
+    area.areaIndex,
+    area.label,
+    area.x,
+    area.y,
+    area.width,
+    area.height,
+    area.action.type,
+    area.action.uri,
+    area.action.text,
+    area.action.data,
+    area.action.displayText,
+    area.action.targetPageId,
+  ));
+  if (statements.length) await env.DB.batch(statements);
+}
+
+async function loadSmartMenuTemplate(env, templateId) {
+  const workspaceId = smartMenuWorkspaceId();
+  const row = await env.DB.prepare(`
+    SELECT t.id, t.name, t.industry, t.status, t.asset_id AS assetId, t.area_count AS areaCount,
+           t.page_count AS pageCount, t.ai_provider AS aiProvider, t.ai_model AS aiModel,
+           t.created_at AS createdAt, t.updated_at AS updatedAt, a.image_data_url AS imageDataUrl
+    FROM smart_menu_templates t
+    LEFT JOIN smart_menu_assets a ON a.id = t.asset_id AND a.deleted_at IS NULL
+    WHERE t.id = ? AND t.workspace_id = ? AND t.deleted_at IS NULL
+    LIMIT 1
+  `).bind(templateId, workspaceId).first();
+  if (!row) return null;
+  const { results } = await env.DB.prepare(`
+    SELECT *
+    FROM smart_menu_template_areas
+    WHERE template_id = ? AND workspace_id = ?
+    ORDER BY area_index ASC
+  `).bind(templateId, workspaceId).all();
+  return {
+    ...smartMenuPublicTemplate(row),
+    areas: (results || []).map(area => ({
+      id: area.id,
+      areaIndex: Number(area.area_index || 0),
+      label: area.label || "",
+      x: toNum(area.x),
+      y: toNum(area.y),
+      width: toNum(area.width),
+      height: toNum(area.height),
+      action: smartMenuActionFromRow(area),
+    })),
+  };
+}
+
+async function getSmartMenuProjectGuide(request, env, projectId) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const project = await loadSmartMenuProject(env, projectId);
+  if (!project) return json({ ok: false, success: false, error: "project_not_found" }, 404);
+  const issues = [];
+  const recommendations = [];
+  if (!project.imageDataUrl) {
+    issues.push({ code: "PROJECT_IMAGE_MISSING", severity: "blocking", message: "此專案尚未設定 Rich Menu 圖片。", target: "project-image" });
+  }
+  if (!project.areas.length) {
+    issues.push({ code: "PROJECT_AREA_ACTION_INCOMPLETE", severity: "warning", message: "此專案尚未建立可設定的區域。", target: "project-areas" });
+  }
+  for (const area of project.areas) {
+    const action = normalizeSmartMenuAction(area.action);
+    if (!["uri", "message", "postback", "richmenuswitch"].includes(action.type)) {
+      issues.push({ code: "PROJECT_AREA_ACTION_INCOMPLETE", severity: "warning", message: `「${area.label}」尚未設定動作。`, target: `project-area-${area.id}-action-type` });
+    } else if (action.type === "uri" && !action.uri) {
+      issues.push({ code: "ACTION_URI_MISSING", severity: "warning", message: `「${area.label}」尚未設定網址。`, target: `project-area-${area.id}-uri` });
+    } else if (action.type === "message" && !action.text) {
+      issues.push({ code: "ACTION_MESSAGE_MISSING", severity: "warning", message: `「${area.label}」尚未設定訊息文字。`, target: `project-area-${area.id}-message` });
+    } else if (action.type === "postback" && !action.data) {
+      issues.push({ code: "ACTION_POSTBACK_DATA_MISSING", severity: "warning", message: `「${area.label}」尚未設定 Postback data。`, target: `project-area-${area.id}-postback-data` });
+    } else if (action.type === "richmenuswitch" && !action.targetPageId) {
+      issues.push({ code: "ACTION_SWITCH_TARGET_MISSING", severity: "warning", message: `「${area.label}」尚未選擇切換目標。`, target: `project-area-${area.id}-switch-target` });
+    }
+  }
+  if (!String(env.LINE_CHANNEL_ACCESS_TOKEN || "").trim()) {
+    issues.push({ code: "LINE_BOT_TOKEN_MISSING", severity: "warning", message: "LINE Bot Channel Access Token 尚未設定。", target: "line-account-settings" });
+  }
+  if (project.status === "draft") recommendations.push("目前仍是草稿。完成圖片與熱區 Action 後，發布至 LINE。");
+  if (project.status === "published") recommendations.push("已發布。需要成為目前選單時，請設為首頁。");
+  if (project.status === "default") recommendations.push("此專案已是首頁圖文選單。");
+  const checks = [
+    Boolean(project.imageDataUrl),
+    project.areas.length > 0,
+    project.areas.every(area => !["", "none"].includes(normalizeSmartMenuAction(area.action).type)),
+    !issues.some(issue => String(issue.code).startsWith("ACTION_")),
+    Boolean(String(env.LINE_CHANNEL_ACCESS_TOKEN || "").trim()),
+  ];
+  const completed = checks.filter(Boolean).length;
+  const blocking = issues.find(issue => issue.severity === "blocking");
+  const firstIssue = issues[0];
+  return json({
+    ok: true,
+    success: true,
+    guide: {
+      status: blocking ? "blocked" : (issues.length ? "incomplete" : "complete"),
+      currentStep: blocking ? "project_image" : (issues.length ? "project_actions" : "basic_setup_complete"),
+      progress: { completed, total: 5, percent: completed * 20 },
+      nextAction: firstIssue ? { type: "focus", target: firstIssue.target, message: firstIssue.message, priority: firstIssue.severity === "blocking" ? "high" : "medium" } : { type: "none", target: "", message: "基本設定已完成，可發布或設為首頁。", priority: "low" },
+      issues,
+      recommendations: recommendations.length ? recommendations : ["基本設定已完成，可進行下一階段檢查。"],
+    },
+  });
+}
+
 async function handleSmartMenuProjectRoute(request, env, url) {
   const suffix = url.pathname.slice("/api/admin/smart-menu/projects/".length);
   const parts = suffix.split("/").map(part => decodeURIComponent(part)).filter(Boolean);
@@ -3493,6 +4057,7 @@ async function handleSmartMenuProjectRoute(request, env, url) {
   const action = parts[1] || "";
   if (!projectId) return json({ ok: false, error: "missing_project_id" }, 400);
   if (request.method === "GET" && !action) return getSmartMenuProject(request, env, projectId);
+  if (request.method === "GET" && action === "guide") return getSmartMenuProjectGuide(request, env, projectId);
   if (request.method === "PATCH" && !action) return updateSmartMenuProject(request, env, projectId);
   if (request.method === "DELETE" && !action) return deleteSmartMenuProject(request, env, projectId);
   if (request.method === "POST" && action === "upload-image") return uploadSmartMenuProjectImage(request, env, projectId);
