@@ -1514,10 +1514,10 @@ function defaultHookteaSettings(env) {
     shop_module: "hooktea",
     huaxu_products_url: "",
     huaxu_api_key: "",
-    shop_hero_title: "HookTea 精選 LINE 限定商城",
+    shop_hero_title: "重口味溫泉魚精選 LINE 限定商城",
     shop_hero_badge: "新會員限定",
-    shop_hero_subtitle: "HookTea LINE 限定商城，訂單送出後會進入 HookTea 後台訂單維護。",
-    shop_categories: "熱門商品,線上購物商品,虎克茶,新會員優惠,本月活動",
+    shop_hero_subtitle: "重口味溫泉魚 LINE 限定商城，訂單送出後會進入重口味溫泉魚後台訂單維護。",
+    shop_categories: "熱門商品,線上購物商品,重口味溫泉魚,新會員優惠,本月活動",
     shop_member_title: "會員專區",
     shop_checkin_label: "每日簽到領點",
     shop_member_modules: "點數記錄,分享好友,推薦成果,個人基本資料",
@@ -1557,6 +1557,14 @@ function mergePlainSettings(base, override) {
   return result;
 }
 
+function disableWasabiSettings(settings) {
+  return {
+    ...settings,
+    low_risk_wasabi_read_enabled: "false",
+    high_risk_wasabi_read_enabled: "false",
+  };
+}
+
 async function getAdminSettings(request, env) {
   requireAdmin(request, env);
   requireDb(env);
@@ -1571,7 +1579,7 @@ async function getAdminSettings(request, env) {
     throw error;
   });
   const saved = parseJson(row?.valueJson || "{}", {});
-  return json({ ok: true, data: { settings: mergePlainSettings(defaults, saved), updatedAt: row?.updatedAt || "", updatedBy: row?.updatedBy || "" } });
+  return json({ ok: true, data: { settings: disableWasabiSettings(mergePlainSettings(defaults, saved)), updatedAt: row?.updatedAt || "", updatedBy: row?.updatedBy || "" } });
 }
 
 async function saveAdminSettings(request, env) {
@@ -1579,7 +1587,7 @@ async function saveAdminSettings(request, env) {
   requireDb(env);
   const payload = await request.json().catch(() => ({}));
   const defaults = defaultHookteaSettings(env);
-  const settings = mergePlainSettings(defaults, payload.settings || payload);
+  const settings = disableWasabiSettings(mergePlainSettings(defaults, payload.settings || payload));
   await env.DB.prepare(`
     INSERT INTO system_settings (key, value_json, updated_by, updated_at)
     VALUES ('hooktea_settings', ?, 'admin', datetime('now'))
@@ -2204,7 +2212,7 @@ async function getPublicHookteaSettings(env) {
     WHERE key = 'hooktea_settings'
     LIMIT 1
   `).first().catch(() => null);
-  return mergePlainSettings(defaults, parseJson(row?.valueJson || "{}", {}));
+  return disableWasabiSettings(mergePlainSettings(defaults, parseJson(row?.valueJson || "{}", {})));
 }
 
 function normalizeShopProduct(row) {
@@ -2214,7 +2222,7 @@ function normalizeShopProduct(row) {
     code: row.code || row.sku || "",
     name: row.name || "",
     category: row.category || "",
-    storeName: row.storeName || "HookTea",
+    storeName: row.storeName || "重口味溫泉魚",
     subtitle: row.subtitle || "",
     badge: row.badge || "",
     image: row.image || "",
@@ -6529,7 +6537,7 @@ async function renderShopPage(request, env) {
   } catch (error) {
     loadError = String(error?.message || error);
   }
-  const brandTitle = String(settings.shop_front_title || settings.shop_name || "HookTea 商城").trim() || "HookTea 商城";
+  const brandTitle = String(settings.shop_front_title || settings.shop_name || "重口味溫泉魚商城").trim() || "重口味溫泉魚商城";
   const heroTitle = String(settings.shop_hero_title || "喚醒 蛻變 完整").trim();
   const heroBadge = String(settings.shop_hero_badge || "").trim();
   const heroSubtitle = String(settings.shop_hero_subtitle || "讓生活有光，讓選擇有路").trim();
@@ -6599,7 +6607,7 @@ async function renderShopPage(request, env) {
     const $=id=>document.getElementById(id), money=n=>"$"+Number(n||0).toLocaleString("zh-TW"), esc=s=>String(s||"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
     function splitCsv(v){return String(v||"").split(/[,，\\n]/).map(s=>s.trim()).filter(Boolean)}
     function categories(){const configured=splitCsv(settings.shop_categories||"");const fromProducts=[...new Set(products.map(p=>p.category).filter(Boolean))];return ["ALL",...(configured.length?configured:fromProducts)]}
-    function renderShell(){ $("brandTitle").textContent=initial.brandTitle||settings.shop_name||"HookTea"; if($("heroBadge")){ const badge=initial.heroBadge||""; $("heroBadge").textContent=badge; $("heroBadge").style.display=badge?"inline-flex":"none"; } $("heroTitle").textContent=initial.heroTitle||settings.shop_hero_title||"HookTea"; $("heroSubtitle").textContent=initial.heroSubtitle||settings.shop_hero_subtitle||""; if(initial.heroImage){$("heroBanner").style.backgroundImage='url("'+String(initial.heroImage).replace(/"/g,"%22")+'")'} $("remittanceInfo").textContent=settings.remittance_info||"匯款資訊尚未設定，請送出後等候客服通知。"; const methods=splitCsv(settings.shop_payment_methods||"LINEPAY,REMITTANCE,COD"); $("paymentMethod").innerHTML=methods.map(m=>'<option value="'+esc(m.toUpperCase())+'">'+paymentLabel(m)+'</option>').join('')||'<option value="REMITTANCE">銀行匯款</option>'; $("loadErrorBox").innerHTML=initial.loadError?'<div class="load-error">商品讀取失敗：'+esc(initial.loadError)+'</div>':''; }
+    function renderShell(){ $("brandTitle").textContent=initial.brandTitle||settings.shop_name||"重口味溫泉魚"; if($("heroBadge")){ const badge=initial.heroBadge||""; $("heroBadge").textContent=badge; $("heroBadge").style.display=badge?"inline-flex":"none"; } $("heroTitle").textContent=initial.heroTitle||settings.shop_hero_title||"重口味溫泉魚"; $("heroSubtitle").textContent=initial.heroSubtitle||settings.shop_hero_subtitle||""; if(initial.heroImage){$("heroBanner").style.backgroundImage='url("'+String(initial.heroImage).replace(/"/g,"%22")+'")'} $("remittanceInfo").textContent=settings.remittance_info||"匯款資訊尚未設定，請送出後等候客服通知。"; const methods=splitCsv(settings.shop_payment_methods||"LINEPAY,REMITTANCE,COD"); $("paymentMethod").innerHTML=methods.map(m=>'<option value="'+esc(m.toUpperCase())+'">'+paymentLabel(m)+'</option>').join('')||'<option value="REMITTANCE">銀行匯款</option>'; $("loadErrorBox").innerHTML=initial.loadError?'<div class="load-error">商品讀取失敗：'+esc(initial.loadError)+'</div>':''; }
     function paymentLabel(m){m=String(m||"").toUpperCase();return {LINEPAY:"LINE Pay",REMITTANCE:"銀行匯款",COD:"貨到付款",NEWEBPAY:"線上刷卡",POINTS:"點數折抵"}[m]||m}
     function renderTabs(){ $("categoryTabs").innerHTML=categories().map(c=>'<button class="tab '+(c===activeCategory?'active':'')+'" data-cat="'+esc(c)+'">'+esc(c==="ALL"?'全部商品':c)+'</button>').join(''); document.querySelectorAll('[data-cat]').forEach(btn=>btn.onclick=()=>{activeCategory=btn.dataset.cat;renderAll()}); }
     function renderProducts(){ const rows=products.filter(p=>activeCategory==="ALL"||p.category===activeCategory); $("productGrid").innerHTML=rows.map(p=>'<button type="button" class="shop-card" data-add="'+esc(p.id)+'"><div class="card-img '+(p.image?'':'empty')+'">'+(p.image?'<img src="'+esc(p.image)+'" alt="">':'<span>Image</span>')+'</div><div class="card-body"><div class="card-title">'+esc(p.name)+'</div><div class="card-desc">'+esc(p.subtitle||p.description||p.badge||"")+'</div><div class="card-line"></div><div class="card-bottom"><div><div class="price">'+(Number(p.price||0)>0?money(p.price):(p.subtitle||"免費參加"))+'</div><div class="points">可扣 '+Number(p.pointsPrice||0).toLocaleString("zh-TW")+' 點</div></div><span class="add-mini">加入</span></div></div></button>').join('')||'<div class="empty-state">目前沒有上架商品</div>'; document.querySelectorAll('[data-add]').forEach(btn=>btn.onclick=()=>{addCart(btn.dataset.add);openCart();}); }
@@ -6722,7 +6730,7 @@ function renderHookteaAdminPage(env) {
   const publicUrl = env.WORKER_PUBLIC_URL || "https://gusys.fangwl591021.workers.dev";
   const motherUrl = env.MOTHER_WEBHOOK_URL || "";
   const lineWebhookUrl = `${publicUrl}/line-webhook`;
-  return new Response(`<!doctype html>
+  const html = `<!doctype html>
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
@@ -6967,5 +6975,11 @@ function renderHookteaAdminPage(env) {
     setView("dashboard"); loadAll();
   </script>
 </body>
-</html>`, { headers: HTML_HEADERS });
+</html>`;
+  const brandedHtml = html
+    .replaceAll("HookTea", "重口味溫泉魚")
+    .replaceAll("虎克茶", "重口味溫泉魚")
+    .replace(/<div class="settings-band" style="background:#eef2ff;border-color:#c7d2fe">[\s\S]*?<\/select><\/div>/, "")
+    .replace(/<div class="settings-band" style="background:#fff1f2;border-color:#fecdd3">[\s\S]*?<\/select><\/div>/, "");
+  return new Response(brandedHtml, { headers: HTML_HEADERS });
 }
