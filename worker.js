@@ -56,6 +56,8 @@ export default {
       if (url.pathname === "/api/admin/ai-provider" && request.method === "POST") return await saveAdminAiProvider(request, env);
       if (url.pathname === "/api/admin/ai-provider" && request.method === "DELETE") return await deleteAdminAiProvider(request, env);
       if (url.pathname === "/api/admin/ai-provider/test" && request.method === "POST") return await testAdminAiProvider(request, env);
+      if (url.pathname === "/api/admin/line-webhook/endpoint" && request.method === "GET") return getAdminLineWebhookEndpoint(request, env);
+      if (url.pathname === "/api/admin/line-webhook/endpoint" && request.method === "POST") return saveAdminLineWebhookEndpoint(request, env);
       if (url.pathname === "/api/admin/broadcast-data" && request.method === "GET") return getBroadcastData(request, env);
       if (url.pathname === "/api/admin/broadcast-tags" && request.method === "POST") return saveBroadcastTag(request, env);
       if (url.pathname === "/api/admin/broadcast-tags/member" && request.method === "POST") return tagBroadcastMember(request, env);
@@ -1318,6 +1320,50 @@ async function testAdminAiProvider(request, env) {
       response: extractGeminiText(result.body).slice(0, 80),
     },
   });
+}
+
+async function callLineWebhookSettingsApi(env, path, options = {}) {
+  const token = String(env.LINE_CHANNEL_ACCESS_TOKEN || "").trim();
+  if (!token) throw new HttpError(400, "line_channel_access_token_missing");
+  const response = await fetch(`https://api.line.me${path}`, {
+    method: options.method || "GET",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const text = await response.text();
+  const body = parseJson(text, {});
+  if (!response.ok) {
+    throw new HttpError(response.status >= 500 ? 502 : response.status, String(body?.message || text || `LINE HTTP ${response.status}`));
+  }
+  return body;
+}
+
+async function getAdminLineWebhookEndpoint(request, env) {
+  requireAdmin(request, env);
+  const data = await callLineWebhookSettingsApi(env, "/v2/bot/channel/webhook/endpoint");
+  return json({ ok: true, data });
+}
+
+async function saveAdminLineWebhookEndpoint(request, env) {
+  requireAdmin(request, env);
+  const payload = await request.json().catch(() => ({}));
+  const endpoint = String(payload.endpoint || `${workerPublicBase(env)}/line-webhook`).trim();
+  if (!/^https:\/\/[^\s]+$/i.test(endpoint) || endpoint.length > 500) {
+    throw new HttpError(400, "invalid_line_webhook_endpoint");
+  }
+  await callLineWebhookSettingsApi(env, "/v2/bot/channel/webhook/endpoint", {
+    method: "PUT",
+    body: { endpoint },
+  });
+  const test = await callLineWebhookSettingsApi(env, "/v2/bot/channel/webhook/test", {
+    method: "POST",
+    body: { endpoint },
+  });
+  const current = await callLineWebhookSettingsApi(env, "/v2/bot/channel/webhook/endpoint");
+  return json({ ok: true, data: { endpoint, current, test } });
 }
 async function updateAdminCustomer(request, env) {
   requireAdmin(request, env);
