@@ -250,6 +250,17 @@ async function handleLineWebhook(request, env, ctx) {
   }
 
   const events = Array.isArray(lineBody.events) ? lineBody.events : [];
+  if (!events.length) {
+    if (env.DB) {
+      ctx.waitUntil(recordWebhookDebug(env, "LINE_WEBHOOK_VERIFY_PROBE_LAST", {
+        signature: "verified",
+        acceptedAt: new Date().toISOString(),
+      }).catch(error => {
+        console.error(JSON.stringify({ level: "error", message: "record_line_verify_probe_failed", error: String(error?.message || error) }));
+      }));
+    }
+    return json({ ok: true, verify: true, signature: "verified" });
+  }
 
   if (env.DB) {
     ctx.waitUntil(recordLineEvents(env, events, rawBody).catch(error => {
@@ -301,6 +312,18 @@ async function handleLineWebhook(request, env, ctx) {
   }
 
   return json({ ok: true, mother: motherResult.summary, ai: aiDecision.summary, reply: null });
+}
+
+async function recordWebhookDebug(env, key, value) {
+  if (!env.DB) return;
+  await env.DB.prepare(`
+    INSERT INTO system_settings (key, value_json, updated_by, updated_at)
+    VALUES (?, ?, 'line_webhook', datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET
+      value_json = excluded.value_json,
+      updated_by = excluded.updated_by,
+      updated_at = excluded.updated_at
+  `).bind(String(key || "LINE_WEBHOOK_DEBUG"), JSON.stringify(value || {}).slice(0, 12000)).run();
 }
 
 function lineAiMenuEvent(events) {
