@@ -314,6 +314,31 @@ async function handleLineWebhook(request, env, ctx) {
   return json({ ok: true, mother: motherResult.summary, ai: aiDecision.summary, reply: null });
 }
 
+async function verifyLineSignature(rawBody, signature, channelSecret) {
+  const secret = String(channelSecret || "").trim();
+  const provided = String(signature || "").trim();
+  if (!secret) return { ok: false, reason: "line_channel_secret_missing" };
+  if (!provided) return { ok: false, reason: "line_signature_missing" };
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    const ok = await crypto.subtle.verify(
+      "HMAC",
+      key,
+      base64ToBytes(provided),
+      new TextEncoder().encode(String(rawBody || "")),
+    );
+    return { ok, reason: ok ? "verified" : "invalid_signature" };
+  } catch (error) {
+    return { ok: false, reason: `signature_verification_failed:${String(error?.message || error)}` };
+  }
+}
+
 async function recordWebhookDebug(env, key, value) {
   if (!env.DB) return;
   await env.DB.prepare(`
