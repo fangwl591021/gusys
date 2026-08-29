@@ -30,11 +30,12 @@ const LINE_KEYWORD_MENU_KEYWORDS = new Set([
 
 const LINE_NAVIGATION_MENU_KEYWORD = "導航與停車指南";
 const LINE_POOL_HYGIENE_MENU_KEYWORD = "入池衛生須知";
+const LINE_BUSINESS_HOURS_MENU_KEYWORD = "營業時間與公休";
 const LINE_MEMBER_SHARE_MENU_KEYWORDS = new Set(["分享好友拿優惠", "會員分享", "分享好友"]);
 const LINE_KEYWORD_MENU_REPLIES = new Map([
   ["最新活動", "📌 最新活動\n\n目前活動資訊以現場與 LINE 官方帳號公告為準。\n\n• 一般散客無須預約，營業時間內直接到店即可\n• 當日購票不限時間，蓋章後可重複進場\n\n如需確認當日活動，請點選「聯絡客服」。"],
   ["收費標準與魚種", "🎫 收費標準與魚種\n\n• 成人票 100 元\n• 兒童票 80 元（4 歲以下免費）\n• 當天不限時間，蓋章可重複進場\n• 現場共有 12 種不同互動感受\n• 目前僅收現金\n\n平日優惠與團體方案請以現場公告為準。"],
-  ["營業時間與公休", "🕘 營業時間與公休\n\n• 平日 09:00–22:00\n• 假日 09:00–23:00\n• 全年無休\n\n特殊天候或臨時調整，請以 LINE 官方帳號最新公告為準。"],
+  ["營業時間與公休", "🕘 營業時間與公休\n\n• 平日 09:00–22:00\n• 假日 09:00–23:00\n• 全年無休\n\n特殊天候或臨時調整，請以 LINE 官方帳號最新公告為準。\n出發前可點選下方即時資訊。"],
   ["數位集點卡", "🎁 集點服務\n\n目前重口味溫泉魚沒有提供集點或點數服務。\n如有其他優惠活動，請以 LINE 官方帳號最新公告為準。"],
   ["礁溪順遊推薦", "📍 礁溪順遊推薦\n\n可將重口味溫泉魚與湯圍溝溫泉公園、礁溪市區散步及在地美食安排在同一段行程。\n\n店家位於礁溪市區、鄰近湯圍溝，適合規劃輕鬆的半日遊。"],
   ["常見問題(FAQ)", "💬 常見問題\n\n可透過圖文選單查看收費、營業時間、導航停車與入池須知。\n\n其他問題請點選「聯絡客服」，並直接留言。"],
@@ -62,6 +63,11 @@ const LINE_NEARBY_PARKING_PLACES = [
   { name: "湯圍溝停車場", proximity: "距湯圍溝公園約 27 公尺" },
   { name: "盱江新村停車場", proximity: "距湯圍溝公園約 128 公尺" },
   { name: "川湯春天溫泉酒店站前停車場", proximity: "距湯圍溝公園約 202 公尺" },
+];
+const LINE_VISITOR_PREP_LINKS = [
+  { label: "礁溪天氣", uri: "https://www.cwa.gov.tw/V8/C/W/Town/Town.html?TID=10002050" },
+  { label: "台鐵時刻", uri: "https://tip.railway.gov.tw/tra-tip-web/tip/tip001/tip112/gobytime?lang=zh_TW" },
+  { label: "國道即時路況", uri: "https://1968.freeway.gov.tw/" },
 ];
 
 export default {
@@ -832,6 +838,23 @@ function googleMapsDirectionsUrl(destination) {
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(String(destination || "").trim())}&travelmode=driving&dir_action=navigate`;
 }
 
+function buildLineBusinessHoursMessage() {
+  return {
+    type: "text",
+    text: LINE_KEYWORD_MENU_REPLIES.get(LINE_BUSINESS_HOURS_MENU_KEYWORD),
+    quickReply: {
+      items: LINE_VISITOR_PREP_LINKS.map(link => ({
+        type: "action",
+        action: {
+          type: "uri",
+          label: link.label,
+          uri: link.uri,
+        },
+      })),
+    },
+  };
+}
+
 function buildLineParkingFlexMessage() {
   const storeMapUrl = googleMapsDirectionsUrl(`${LINE_STORE_LOCATION.name} ${LINE_STORE_LOCATION.address}`);
   const bubbles = LINE_NEARBY_PARKING_PLACES.map((place, index) => ({
@@ -1032,11 +1055,14 @@ async function buildLineKeywordMenuReplyDecision(env, events) {
   try {
     const isParkingGuide = target.keyword === LINE_NAVIGATION_MENU_KEYWORD;
     const isPoolHygieneGuide = target.keyword === LINE_POOL_HYGIENE_MENU_KEYWORD;
+    const isBusinessHours = target.keyword === LINE_BUSINESS_HOURS_MENU_KEYWORD;
     const message = isParkingGuide
       ? buildLineParkingFlexMessage()
       : isPoolHygieneGuide
         ? await buildLinePoolHygieneFlexMessage(env)
-        : { type: "text", text: LINE_KEYWORD_MENU_REPLIES.get(target.keyword) || "請點選「聯絡客服」留言詢問。" };
+        : isBusinessHours
+          ? buildLineBusinessHoursMessage()
+          : { type: "text", text: LINE_KEYWORD_MENU_REPLIES.get(target.keyword) || "請點選「聯絡客服」留言詢問。" };
     return {
       handled: true,
       outcome: "keyword",
