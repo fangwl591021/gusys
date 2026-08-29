@@ -84,53 +84,48 @@ const LINE_JIAOXI_RECOMMENDATION_CATEGORIES = [
 ];
 const LINE_JIAOXI_RECOMMENDATIONS = {
   food: {
-    image: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=900&q=80",
     items: [
-      { name: "樂漁 鮮魚定食×咖啡", phone: "0975001801" },
-      { name: "小食粑", phone: "0965345663" },
-      { name: "初 firstday food 早午餐", phone: "039881513" },
-      { name: "空ㄟ農場", phone: "0912089795" },
-      { name: "義眾魚羹之家", phone: "039881060" },
+      { name: "樂漁 鮮魚定食×咖啡", phone: "0975001801", image: "https://pgw.udn.com.tw/gw/photo.php?M=1&exp=3600&fw=800&sh=0&sl=W&sw=0&u=https%3A%2F%2Fuc.udn.com.tw%2Fphoto%2Ft3%2F2026%2F04%2F03%2F34825051.jpg&w=800&x=0&y=0", imageSource: "聯合新聞網店家實景", imageSourceUrl: "https://travel.udn.com/travel/story/7210/9421073" },
+      { name: "小食粑", phone: "0965345663", image: "https://cdn-general.cybassets.com/media/W1siZiIsIjMzMzgwL2F0dGFjaGVkX3Bob3Rvcy8xNzUzOTMwNjQ3X-e2suermWxvZ282X-W3peS9nOWNgOWfnyAxLmpwZy5qcGVnIl1d.jpeg?sha=2b4e1719fa9a1492", imageSource: "小食粑官方網站", imageSourceUrl: "https://ricecakemini.cyberbiz.co/" },
+      { name: "初 firstday food 早午餐", phone: "039881513", image: "https://shaper.fooday.app/width%3D1200%2Cquality%3D75%2Cformat%3Dauto/ZSd6stdTuehRrsLcBAuUS9", imageSource: "Fooday 店家實景", imageSourceUrl: "https://fooday.app/zh-TW/spots/Um7PMzG3HskZN8wd8shfmB" },
+      { name: "空ㄟ農場", phone: "0912089795", image: "https://fupo.tw/wp-content/uploads/2022/08/%E5%AE%9C%E8%98%AD%E5%A4%9C%E6%99%AF%E7%A9%BA%E3%84%9F%E8%BE%B2%E5%A0%B4-11.jpg", imageSource: "小腹婆店家實景", imageSourceUrl: "https://fupo.tw/blog/post/kongpizzacafe" },
+      { name: "義眾魚羹之家", phone: "039881060", image: "https://jiaoxi-tourism.tw/media/k2/items/cache/15d406f06ce12f2ac57cb5137d1afc69_M.jpg", imageSource: "礁溪旅遊網／店家提供", imageSourceUrl: "https://jiaoxi-tourism.tw/index.php/zh/component/k2/item/393-shop-e-60" },
     ],
   },
   stay: {
-    image: "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=900&q=80",
     items: [
-      { name: "礁溪沐夏民宿", phone: "0955323655" },
-      { name: "瑪林好室 Mori House", phone: "0928554033" },
-      { name: "廸布斯民宿", phone: "0927963513" },
-      { name: "枂舍 Yueshe House", phone: "0958487958" },
-      { name: "礁溪木BOX田妍山色", phone: "0952670940" },
+      { name: "礁溪沐夏民宿", phone: "0955323655", image: "https://tw-bnb.com/web/mx/img/img100/e17.jpg", imageSource: "礁溪沐夏民宿官網", imageSourceUrl: "https://tw-bnb.com/web/mx/" },
+      { name: "佧美．奧之湯 ISPAVITA", phone: "039870789", image: "https://www.ispavita.com.tw/images/about1.png", imageSource: "ISPAVITA 官網", imageSourceUrl: "https://www.ispavita.com.tw/" },
+      { name: "礁溪老爺酒店", phone: "039886288", image: "https://imagedelivery.net/a6-OYZSpZSiOriMeuFHR3w/10be9358-27f1-4b39-575f-b8a72bc88a00/public", imageSource: "礁溪老爺酒店官網", imageSourceUrl: "https://www.hotelroyal.com.tw/zh-tw/chiaohsi/about/Intro" },
+      { name: "枂舍 Yueshe House", phone: "0958487958", image: "https://hemusih.com/yueshe-house/public/gallery/%E5%8D%81%E4%BA%BA/img-3.jpg", imageSource: "枂舍官網", imageSourceUrl: "https://hemusih.com/yueshe-house/" },
+      { name: "礁溪木BOX田妍山色", phone: "0952670940", image: "https://www.easytravel.com.tw/ehotel/hotelimg/picture/b/10089_202305311644587603_403.JPG", imageSource: "店家住宿實景", imageSourceUrl: "https://www.easytravel.com.tw/ehotel/default.aspx?n=10089" },
     ],
   },
   visit: {
-    image: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=900&q=80",
     items: [
-      { name: "湯圍溝溫泉公園", phone: "039872998", phoneLabel: "旅遊洽詢" },
-      { name: "五峰旗瀑布", phone: "039872998", phoneLabel: "旅遊洽詢" },
-      { name: "林美石磐步道", phone: "039872998", phoneLabel: "旅遊洽詢" },
-      { name: "礁溪溫泉公園", phone: "039872998", phoneLabel: "旅遊洽詢" },
-      { name: "龍潭湖風景區", phone: "039872998", phoneLabel: "旅遊洽詢" },
+      { name: "湯圍溝溫泉公園", phone: "039872998", phoneLabel: "旅遊洽詢", image: "https://travel.yilan.gov.tw/_api/content/images/attractions/10855/1920x1080_attractions-image-j6gerok9dee7gvfauoiqzq.jpg", imageSource: "宜蘭勁好玩", imageSourceUrl: "https://travel.yilan.gov.tw/zh-tw/attraction/92/" },
+      { name: "五峰旗瀑布", phone: "039872998", phoneLabel: "旅遊洽詢", image: "https://www.jiaoxi-tourism.tw/media/k2/items/cache/171fc14b49a79ea979710de5b3402b30_M.jpg", imageSource: "礁溪旅遊網", imageSourceUrl: "https://www.jiaoxi-tourism.tw/index.php/zh/people/item/157-view35" },
+      { name: "林美石磐步道", phone: "039882514", phoneLabel: "管理洽詢", image: "https://travel.yilan.gov.tw/_api/content/images/attractions/26917/1920x1080_attractions-image-npnynjx3veiq6_votk0lvw.jpg", imageSource: "宜蘭勁好玩", imageSourceUrl: "https://travel.yilan.gov.tw/zh-tw/attraction/100/" },
+      { name: "礁溪溫泉公園", phone: "039872998", phoneLabel: "旅遊洽詢", image: "https://travel.yilan.gov.tw/_api/content/images/imagealbums/25758/480x360_imagealbums-image-5slirsdywkczbudmysz-uw.jpg", imageSource: "宜蘭勁好玩", imageSourceUrl: "https://travel.yilan.gov.tw/zh-tw/album/2965/" },
+      { name: "龍潭湖風景區", phone: "039280141", phoneLabel: "管理洽詢", image: "https://travel.yilan.gov.tw/_api/content/images/attractions/10973/1920x1080_attractions-image-nlmqygpkfeyoi09quw6ssa.jpg", imageSource: "宜蘭勁好玩", imageSourceUrl: "https://travel.yilan.gov.tw/zh-tw/attraction/104/" },
     ],
   },
   shop: {
-    image: "https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=900&q=80",
     items: [
-      { name: "抹茶山伴手禮 礁溪店", phone: "039883370" },
-      { name: "阿萬之家 礁溪店", phone: "039870620" },
-      { name: "奕順軒 礁溪店", phone: "039883058" },
-      { name: "礁溪三源行", phone: "039883329" },
-      { name: "元融 礁溪老爺門市", phone: "039885211" },
+      { name: "諾貝爾奶凍 礁溪店", phone: "039885919", image: "https://www.cakenobel.com.tw/images/menu_images/item01-01.png", imageSource: "諾貝爾奶凍官網", imageSourceUrl: "https://www.cakenobel.com.tw/" },
+      { name: "阿萬之家 礁溪店", phone: "039870620", image: "https://www.jiaoxi-tourism.tw/media/k2/items/cache/c9e8d9069e929f4898939a62f1adcffd_M.jpg", imageSource: "礁溪旅遊網／店家提供", imageSourceUrl: "https://www.jiaoxi-tourism.tw/index.php/zh/shopping/item/287-shop-g-12?showall=1" },
+      { name: "奕順軒 礁溪店", phone: "039876336", image: "https://www.jiaoxi-tourism.tw/media/k2/items/cache/d632334130a2b9d194362b7d857b88bf_M.jpg", imageSource: "礁溪旅遊網／店家提供", imageSourceUrl: "https://www.jiaoxi-tourism.tw/index.php/zh/all-in-one-map/item/284-shop-g-9" },
+      { name: "礁溪三源行", phone: "039883329", image: "https://www.samguan.com.tw/archive/image/header_info/FB200116-layout_thumb_1851_913.jpg", imageSource: "三源行官網", imageSourceUrl: "https://www.samguan.com.tw/" },
+      { name: "元融 礁溪老爺門市", phone: "039885211", image: "https://www.yuanrong.tw/upload-files/news/36535060_1745809372165205_6985180869996576768_o.jpg", imageSource: "元融官網", imageSourceUrl: "https://www.yuanrong.tw/" },
     ],
   },
   transport: {
-    image: "https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=900&q=80",
     items: [
-      { name: "陸零租車 礁溪轉運站服務點", phone: "0983505914" },
-      { name: "灰熊 MOTOR 租車 礁溪店", phone: "039883697" },
-      { name: "ZOCHA 礁溪站前無人店", phone: "0277136860" },
-      { name: "葛瑪蘭客運 礁溪站", phone: "039876739" },
-      { name: "礁溪轉運站旅遊服務中心", phone: "039872998" },
+      { name: "陸零租車 礁溪轉運站服務點", phone: "0983505914", image: "https://60rent.tw/wp-content/uploads/2023/09/%E9%99%B8%E9%9B%B6%E7%A7%9F%E8%BB%8ABN.webp", imageSource: "陸零租車官網", imageSourceUrl: "https://60rent.tw/" },
+      { name: "灰熊 MOTOR 租車 礁溪店", phone: "039883697", image: "https://www.tayih.com.tw/upload/images/Ticket/2022/05/05302.jpg", imageSource: "店家服務實景", imageSourceUrl: "https://www.tayih.com.tw/tickets.asp?c=61&n=3276" },
+      { name: "ZOCHA 礁溪站前無人店", phone: "0277136860", image: "https://static.wixstatic.com/media/8d2acb_72d31d29226d4adf940f29062a2bbb29~mv2.png/v1/crop/x_85,y_0,w_2497,h_1501/fill/w_1188,h_714,al_c,q_95,usm_0.66_1.00_0.01,enc_avif,quality_auto/%E7%A4%81%E6%BA%AA%E7%AB%99%E5%89%8D.png", imageSource: "ZOCHA 官網", imageSourceUrl: "https://www.zocha.com.tw/catalog4/zocha/jiaoxi/trainstation" },
+      { name: "葛瑪蘭客運 礁溪站", phone: "039876739", image: "https://travel.yilan.gov.tw/_api/content/images/attractions/26815/1920x1080_attractions-image-otobqu8vy06ittqrjf9gma.jpg", imageSource: "宜蘭勁好玩／礁溪轉運站", imageSourceUrl: "https://travel.yilan.gov.tw/zh-tw/attraction/673/" },
+      { name: "礁溪轉運站旅遊服務中心", phone: "039872998", image: "https://travel.yilan.gov.tw/_api/content/images/attractions/26813/480x360_attractions-image-yju6afu2f0g5iewadherwg.jpg", imageSource: "宜蘭勁好玩／礁溪轉運站", imageSourceUrl: "https://travel.yilan.gov.tw/zh-tw/attraction/673/" },
     ],
   },
 };
@@ -955,18 +950,33 @@ function formatTaiwanPhone(phone) {
 
 function buildLineJiaoxiRecommendationFlexMessage(category) {
   const recommendation = LINE_JIAOXI_RECOMMENDATIONS[category.key];
-  const bubbles = recommendation.items.map((place, index) => ({
-    type: "bubble",
-    size: "kilo",
-    hero: {
-      type: "image",
-      url: recommendation.image,
-      size: "full",
-      aspectRatio: "20:13",
-      aspectMode: "cover",
-      action: { type: "uri", label: "查看 Google Maps", uri: googleMapsSearchUrl(`${place.name} 宜蘭礁溪`) },
-    },
-    body: {
+  const bubbles = recommendation.items.map((place, index) => {
+    const sourceLine = place.imageSource
+      ? {
+          type: "text",
+          text: `圖片來源：${place.imageSource}`,
+          size: "xxs",
+          color: "#64748B",
+          wrap: true,
+          ...(place.imageSourceUrl ? { action: { type: "uri", label: "查看圖片來源", uri: place.imageSourceUrl } } : {}),
+        }
+      : { type: "text", text: "店家尚未提供可核實的公開實景圖。", size: "xxs", color: "#94A3B8", wrap: true };
+    return {
+      type: "bubble",
+      size: "kilo",
+      ...(place.image
+        ? {
+            hero: {
+              type: "image",
+              url: place.image,
+              size: "full",
+              aspectRatio: "20:13",
+              aspectMode: "cover",
+              action: { type: "uri", label: "查看 Google Maps", uri: googleMapsSearchUrl(`${place.name} 宜蘭礁溪`) },
+            },
+          }
+        : {}),
+      body: {
       type: "box",
       layout: "vertical",
       spacing: "sm",
@@ -974,9 +984,10 @@ function buildLineJiaoxiRecommendationFlexMessage(category) {
       contents: [
         { type: "text", text: `${category.emoji} ${category.title} ${index + 1}`, size: "xs", weight: "bold", color: "#0F766E" },
         { type: "text", text: place.name, size: "lg", weight: "bold", color: "#0F172A", wrap: true, maxLines: 2 },
-        { type: "text", text: "★★★★★ Google 評論採 5 星制", size: "xs", color: "#D97706", wrap: true },
+        { type: "text", text: "Google 評分與評論請點導航即時查看", size: "xs", color: "#D97706", wrap: true },
         { type: "text", text: `${place.phoneLabel || "電話"}：${formatTaiwanPhone(place.phone)}`, size: "sm", color: "#475569", wrap: true },
-        { type: "text", text: "照片為分類示意；評分、營業狀態與店家資訊請以 Google Maps 當下顯示為準。", size: "xxs", color: "#94A3B8", wrap: true },
+        sourceLine,
+        { type: "text", text: "營業狀態與店家資訊請以 Google Maps 當下顯示為準。", size: "xxs", color: "#94A3B8", wrap: true },
       ],
     },
     footer: {
@@ -1000,7 +1011,8 @@ function buildLineJiaoxiRecommendationFlexMessage(category) {
         },
       ],
     },
-  }));
+    };
+  });
   return {
     type: "flex",
     altText: `${category.title}：5 個 Google Maps 推薦地點`,
