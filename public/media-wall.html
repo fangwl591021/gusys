@@ -3,21 +3,61 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#151515">
+  <meta name="theme-color" content="#121b22">
+  <meta name="description" content="媒體都在看｜重口味溫泉魚，收錄公開媒體、節目與創作者的採訪及體驗內容。">
+  <link rel="icon" href="data:,">
   <title>媒體都在看｜重口味溫泉魚</title>
   <style>
-    :root{--bg:#f4efe7;--card:#fffdf9;--ink:#211f1b;--muted:#746e65;--accent:#e06931;--accent2:#f7c95d;--line:#e7dfd3;--dark:#181714}
-    *{box-sizing:border-box}html{background:var(--bg)}body{margin:0;color:var(--ink);background:var(--bg);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;-webkit-font-smoothing:antialiased}
-    button,a{font:inherit}.shell{max-width:720px;margin:0 auto;min-height:100vh;background:linear-gradient(180deg,#171612 0 285px,var(--bg) 285px)}
-    .hero{padding:max(24px,env(safe-area-inset-top)) 20px 34px;color:#fff;position:relative;overflow:hidden}.hero:after{content:"";position:absolute;width:220px;height:220px;border:44px solid rgba(247,201,93,.16);border-radius:50%;right:-92px;top:-92px}.eyebrow{font-size:12px;letter-spacing:.18em;font-weight:900;color:var(--accent2)}h1{font-size:34px;line-height:1.08;margin:10px 0 12px;letter-spacing:-.04em}.lead{max-width:520px;font-size:15px;line-height:1.75;color:#ddd8ce;margin:0}.trust{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}.chip{font-size:12px;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:7px 10px;color:#f4efe7;background:rgba(255,255,255,.06)}
-    .content{padding:0 14px 32px}.filters{display:flex;gap:8px;overflow-x:auto;padding:14px 4px 16px;scrollbar-width:none;position:sticky;top:0;z-index:10;background:rgba(244,239,231,.94);backdrop-filter:blur(12px)}.filters::-webkit-scrollbar{display:none}.filter{border:1px solid var(--line);background:#fff;border-radius:999px;padding:9px 13px;white-space:nowrap;font-weight:800;font-size:13px;color:#5d574f}.filter.active{background:var(--dark);border-color:var(--dark);color:#fff}
-    .section-title{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:8px 4px 12px}.section-title h2{font-size:20px;margin:0}.section-title span{font-size:12px;color:var(--muted)}.grid{display:grid;gap:14px}
-    .card{background:var(--card);border:1px solid var(--line);border-radius:20px;overflow:hidden;box-shadow:0 8px 24px rgba(69,53,30,.06)}.card-body{padding:15px}.meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:12px}.badge{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:5px 8px;background:#f4ece0;color:#785330;font-weight:900}.title{font-size:18px;line-height:1.45;font-weight:950;margin:9px 0 7px}.desc{font-size:14px;color:#686159;line-height:1.65;margin:0}.actions{display:flex;gap:9px;margin-top:13px}.btn{flex:1;display:inline-flex;justify-content:center;align-items:center;text-decoration:none;border-radius:12px;padding:11px 12px;font-weight:900;font-size:13px;border:1px solid var(--line);color:#3e3933;background:#fff}.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-    .video{aspect-ratio:16/9;background:#000}.video iframe{display:block;width:100%;height:100%;border:0}.featured{border-color:#d8c5a7}.featured .card-body{background:linear-gradient(180deg,#fffdf9,#fff8ed)}
-    .article{display:grid;grid-template-columns:44px 1fr;gap:12px;align-items:start}.logo{width:44px;height:44px;border-radius:12px;background:#1d1b17;color:#fff;display:grid;place-items:center;font-size:12px;font-weight:950;letter-spacing:.02em}.article .title{margin-top:1px;font-size:16px}.article .desc{font-size:13px}.article-actions{grid-column:2;margin-top:2px}.article-actions .btn{width:auto;display:inline-flex;flex:0 0 auto;padding:9px 12px}
-    .notice{margin-top:18px;border:1px dashed #cdbb9d;background:#f9f1e5;border-radius:16px;padding:14px;font-size:12px;color:#756b5e;line-height:1.7}.footer{text-align:center;padding:24px 18px calc(24px + env(safe-area-inset-bottom));font-size:12px;color:#857d72}.hidden{display:none!important}
-    @media(min-width:650px){.content{padding-left:20px;padding-right:20px}.grid.two{grid-template-columns:1fr 1fr}.grid.two .card{min-width:0}.hero{padding-left:28px;padding-right:28px}}
+    :root{--bg:#f3f5f4;--surface:#fff;--ink:#12202a;--muted:#607078;--accent:#078653;--accent-strong:#05643f;--warm:#f2b84b;--line:#dce4e1;--dark:#121b22}
+    *{box-sizing:border-box}
+    html{background:var(--bg);scroll-behavior:smooth}
+    body{margin:0;color:var(--ink);background:var(--bg);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:0}
+    button,a{font:inherit;-webkit-tap-highlight-color:transparent}
+    button:focus-visible,a:focus-visible{outline:3px solid rgba(7,134,83,.3);outline-offset:3px}
+    .shell{width:100%;max-width:760px;min-height:100vh;margin:0 auto;background:var(--bg)}
+    .hero{padding:max(28px,env(safe-area-inset-top)) 20px 30px;color:#fff;background:var(--dark);border-bottom:5px solid var(--warm)}
+    .eyebrow{font-size:12px;font-weight:900;color:var(--warm);letter-spacing:.18em}
+    h1{margin:10px 0 14px;font-size:clamp(32px,9vw,46px);line-height:1.08;letter-spacing:0}
+    .lead{max-width:620px;margin:0;color:#e3e8e6;font-size:15px;line-height:1.72}
+    .positioning{display:inline-flex;margin-top:18px;padding:8px 10px;border:1px solid #435159;border-radius:6px;color:#f7f9f8;font-size:12px;font-weight:800;line-height:1.5}
+    .content{padding:0 14px 34px}
+    .filters{position:sticky;top:0;z-index:10;display:flex;gap:8px;overflow-x:auto;margin:0 -14px;padding:13px 14px 14px;background:rgba(243,245,244,.96);border-bottom:1px solid var(--line);scrollbar-width:none;overscroll-behavior-inline:contain}
+    .filters::-webkit-scrollbar{display:none}
+    .filter{flex:0 0 auto;min-height:42px;padding:9px 14px;border:1px solid var(--line);border-radius:6px;background:#fff;color:#46565e;font-size:14px;font-weight:800;white-space:nowrap;cursor:pointer}
+    .filter.active{border-color:var(--accent);background:var(--accent);color:#fff}
+    .section-title{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:22px 2px 12px}
+    .section-title h2{margin:0;font-size:21px;line-height:1.25;letter-spacing:0}
+    .section-title span{color:var(--muted);font-size:12px;white-space:nowrap}
+    .grid{display:grid;gap:14px}
+    .card{overflow:hidden;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 22px rgba(31,52,44,.06)}
+    .card.featured{border-top:4px solid var(--accent)}
+    .card-body{padding:16px}
+    .meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;color:var(--muted);font-size:12px;line-height:1.4}
+    .badge{display:inline-flex;padding:5px 8px;border-radius:5px;background:#e7f5ee;color:var(--accent-strong);font-weight:900}
+    .title{margin:10px 0 7px;font-size:18px;font-weight:900;line-height:1.45;letter-spacing:0}
+    .desc{margin:0;color:#5b696f;font-size:14px;line-height:1.68}
+    .actions{display:flex;gap:9px;margin-top:14px}
+    .btn{display:inline-flex;min-height:44px;flex:1;align-items:center;justify-content:center;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:#fff;color:#35444b;font-size:13px;font-weight:900;text-align:center;text-decoration:none;cursor:pointer}
+    .btn.primary{border-color:var(--accent);background:var(--accent);color:#fff}
+    .btn.disabled{border-color:#e3e7e5;background:#eef1ef;color:#8b9692;cursor:not-allowed}
+    .video{position:relative;display:grid;aspect-ratio:16/9;place-items:center;background:#101820;color:#fff}
+    .video iframe{display:block;width:100%;height:100%;border:0}
+    .video-load{display:flex;width:100%;height:100%;align-items:center;justify-content:center;gap:12px;border:0;background:#18252d;color:#fff;cursor:pointer}
+    .play-icon{display:grid;width:52px;height:52px;place-items:center;border-radius:50%;background:var(--accent);font-size:21px;line-height:1}
+    .video-load-text{display:grid;gap:3px;text-align:left}
+    .video-load-text strong{font-size:15px}.video-load-text span{color:#bdc8c4;font-size:12px}
+    .article{display:grid;grid-template-columns:46px minmax(0,1fr);gap:12px;align-items:start}
+    .logo{display:grid;width:46px;height:46px;place-items:center;border-radius:6px;background:var(--dark);color:#fff;font-size:12px;font-weight:900}
+    .article .title{margin-top:2px;font-size:16px}.article .desc{font-size:13px}
+    .article-actions{grid-column:2;margin-top:2px}.article-actions .btn{width:auto;min-width:132px;flex:0 0 auto;padding:9px 12px}
+    .empty{padding:32px 18px;border:1px dashed var(--line);border-radius:8px;background:#fff;color:var(--muted);text-align:center}
+    .notice{margin-top:22px;padding:15px;border:1px solid #d8dfdc;border-left:4px solid var(--warm);border-radius:6px;background:#fff;color:#65736f;font-size:12px;line-height:1.75}
+    .footer{padding:22px 18px calc(24px + env(safe-area-inset-bottom));color:#78847f;font-size:12px;text-align:center}
+    .hidden{display:none!important}
+    @media(min-width:650px){.content{padding-right:20px;padding-left:20px}.filters{margin-right:-20px;margin-left:-20px;padding-right:20px;padding-left:20px}.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.hero{padding-right:28px;padding-left:28px}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
   </style>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script>
 </head>
 <body>
   <main class="shell">
@@ -25,86 +65,187 @@
       <div class="eyebrow">MEDIA WALL</div>
       <h1>媒體都在看<br>重口味溫泉魚</h1>
       <p class="lead">收錄公開媒體、節目與創作者的實際採訪與體驗內容。影片不下載、不重製，只透過原平台官方播放器呈現；文章則連回原始媒體網站。</p>
-      <div class="trust"><span class="chip">官方 Embed</span><span class="chip">原始來源</span><span class="chip">不下載影音</span></div>
+      <div class="positioning">休閒娛樂、溫泉魚互動、礁溪特色體驗</div>
     </header>
 
     <section class="content">
       <nav class="filters" aria-label="媒體分類">
-        <button class="filter active" data-filter="all">全部</button>
-        <button class="filter" data-filter="news">新聞／節目</button>
-        <button class="filter" data-filter="youtube">YouTube</button>
-        <button class="filter" data-filter="travel">旅遊媒體</button>
-        <button class="filter" data-filter="overseas">海外媒體</button>
+        <button class="filter active" type="button" data-filter="all" aria-pressed="true">全部</button>
+        <button class="filter" type="button" data-filter="news" aria-pressed="false">新聞／節目</button>
+        <button class="filter" type="button" data-filter="youtube" aria-pressed="false">YouTube</button>
+        <button class="filter" type="button" data-filter="travel" aria-pressed="false">旅遊媒體</button>
+        <button class="filter" type="button" data-filter="overseas" aria-pressed="false">海外媒體</button>
       </nav>
 
-      <div class="section-title"><h2>影音精選</h2><span>點播放器即可觀看</span></div>
-      <div class="grid" id="videoGrid">
-        <article class="card featured media-item" data-types="news youtube">
-          <div class="video"><iframe loading="lazy" src="https://www.youtube-nocookie.com/embed/PgTTQaAIFAw?playsinline=1&rel=0" title="民視新聞報導所嵌入之重口味溫泉魚相關 YouTube 影片" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe></div>
-          <div class="card-body">
-            <div class="meta"><span class="badge">民視新聞</span><span>2023.08.28</span></div>
-            <div class="title">台日混血創作者到礁溪挑戰大型溫泉魚</div>
-            <p class="desc">民視新聞以影音專題介紹創作者在礁溪從小魚一路挑戰到大型魚池的實際體驗。</p>
-            <div class="actions"><a class="btn primary external" href="https://www.ftvnews.com.tw/news/detail/2023828W0213" target="_blank" rel="noopener noreferrer">查看民視原始報導</a></div>
-          </div>
-        </article>
+      <div class="section-title"><h2>影音精選</h2><span id="videoCount"></span></div>
+      <div class="grid two" id="videoGrid"></div>
 
-        <article class="card media-item" data-types="youtube">
-          <div class="video"><iframe loading="lazy" src="https://www.youtube-nocookie.com/embed/baV_VKE4QMY?playsinline=1&rel=0" title="黑仔熊 重口味溫泉魚 VLOG" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe></div>
-          <div class="card-body">
-            <div class="meta"><span class="badge">YouTube</span><span>黑仔熊</span><span>2022.02.09</span></div>
-            <div class="title">這才不是我熟悉的溫泉魚｜礁溪 VLOG</div>
-            <p class="desc">創作者實際走訪店內，以 VLOG 方式記錄不同魚池與大型魚種的現場反應。</p>
-            <div class="actions"><a class="btn external" href="https://www.youtube.com/watch?v=baV_VKE4QMY" target="_blank" rel="noopener noreferrer">到 YouTube 看原片</a></div>
-          </div>
-        </article>
+      <div class="section-title"><h2>媒體報導</h2><span id="articleCount"></span></div>
+      <div class="grid" id="articleGrid"></div>
 
-        <article class="card media-item" data-types="youtube">
-          <div class="video"><iframe loading="lazy" src="https://www.youtube-nocookie.com/embed/P5h70sOFYuE?playsinline=1&rel=0" title="李懿 礁溪重口味溫泉魚影片" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe></div>
-          <div class="card-body">
-            <div class="meta"><span class="badge">YouTube</span><span>李懿</span><span>2020.01.04</span></div>
-            <div class="title">在地推薦系列｜礁溪巨無霸溫泉魚體驗</div>
-            <p class="desc">旅遊創作者走訪礁溪，在地推薦行程中實際體驗重口味溫泉魚。</p>
-            <div class="actions"><a class="btn external" href="https://www.youtube.com/watch?v=P5h70sOFYuE" target="_blank" rel="noopener noreferrer">到 YouTube 看原片</a></div>
-          </div>
-        </article>
-      </div>
-
-      <div class="section-title" style="margin-top:24px"><h2>媒體報導</h2><span>不轉載文章內容</span></div>
-      <div class="grid" id="articleGrid">
-        <article class="card card-body article media-item" data-types="news">
-          <div class="logo">TVBS</div><div><div class="meta"><span class="badge">食尚玩家</span><span>2024.12.12</span></div><div class="title">《天菜就醬吃》宜蘭篇店家資訊</div><p class="desc">食尚玩家節目頁收錄「礁溪湯圍溝重口味溫泉魚」店家資訊與節目內容。</p></div><div class="article-actions"><a class="btn external" href="https://supertaste.tvbs.com.tw/review/352663" target="_blank" rel="noopener noreferrer">查看原始報導</a></div>
-        </article>
-
-        <article class="card card-body article media-item" data-types="travel news">
-          <div class="logo">UDN</div><div><div class="meta"><span class="badge">聯合新聞網</span><span>旅遊專題</span></div><div class="title">礁溪溫泉小旅行專題</div><p class="desc">聯合新聞網旅遊內容將重口味溫泉魚納入礁溪旅遊行程，介紹不同魚池的體驗特色。</p></div><div class="article-actions"><a class="btn external" href="https://travel.udn.com/travel/story/7210/8446413" target="_blank" rel="noopener noreferrer">查看原始報導</a></div>
-        </article>
-
-        <article class="card card-body article media-item" data-types="travel news">
-          <div class="logo">NOW</div><div><div class="meta"><span class="badge">NOWnews</span><span>2023</span></div><div class="title">宜蘭二日遊行程專題</div><p class="desc">NOWnews／ReadyGo 的宜蘭行程內容將重口味溫泉魚排入礁溪旅遊路線。</p></div><div class="article-actions"><a class="btn external" href="https://www.nownews.com/news/6268298" target="_blank" rel="noopener noreferrer">查看原始報導</a></div>
-        </article>
-
-        <article class="card card-body article media-item" data-types="travel">
-          <div class="logo">WL</div><div><div class="meta"><span class="badge">WalkerLand</span><span>2021.04.20</span></div><div class="title">親子旅遊實際體驗分享</div><p class="desc">以親子遊客角度記錄不同魚種、現場環境與實際體驗感受。</p></div><div class="article-actions"><a class="btn external" href="https://www.walkerland.com.tw/article/view/297536" target="_blank" rel="noopener noreferrer">查看原始文章</a></div>
-        </article>
-
-        <article class="card card-body article media-item" data-types="travel overseas">
-          <div class="logo">JP</div><div><div class="meta"><span class="badge">TABIZINE</span><span>日本媒體</span><span>2022.01.07</span></div><div class="title">日本旅遊媒體礁溪現地報導</div><p class="desc">日本旅遊媒體以海外旅客視角走訪礁溪，實際介紹重口味溫泉魚。</p></div><div class="article-actions"><a class="btn external" href="https://tabizine.jp/2022/01/07/442393/" target="_blank" rel="noopener noreferrer">查看原始報導</a></div>
-        </article>
-      </div>
-
-      <div class="notice">版權說明：本頁不下載、不儲存、不重新上傳第三方影音，也不轉載媒體文章全文或媒體照片。YouTube 影片以官方嵌入播放器呈現；新聞與文章僅提供來源資訊及原始連結。影音或文章若由原發布者移除、限制嵌入或變更權限，本頁將依原平台設定停止顯示或改以原始連結開啟。</div>
+      <div class="empty hidden" id="emptyState">此分類目前尚無內容。</div>
+      <div class="notice">本頁僅整理公開媒體與創作者內容。<br>第三方影片不下載、不儲存、不重新上傳，影音內容依原平台官方嵌入方式呈現；文章與影音版權均屬原發布者所有。<br>如原發布者停止提供或限制嵌入，本頁將不再播放該內容。</div>
     </section>
     <footer class="footer">重口味溫泉魚｜媒體影音牆</footer>
   </main>
+
   <script>
-    const buttons=[...document.querySelectorAll('.filter')];
-    const items=[...document.querySelectorAll('.media-item')];
-    buttons.forEach(btn=>btn.addEventListener('click',()=>{
-      buttons.forEach(b=>b.classList.toggle('active',b===btn));
-      const f=btn.dataset.filter;
-      items.forEach(item=>item.classList.toggle('hidden',f!=='all'&&!item.dataset.types.split(' ').includes(f)));
-    }));
+    const LIFF_ID="2010583609-wHgSLAEF";
+    const MEDIA_ITEMS=[
+      {
+        id:"ftv-20230828",type:"video",categories:["news","youtube"],media:"民視新聞",date:"2023-08-28",
+        title:"台日混血創作者到礁溪挑戰大型溫泉魚",
+        description:"民視新聞以影音專題介紹創作者在礁溪從小魚一路挑戰到大型魚池的實際體驗。",
+        youtubeId:"PgTTQaAIFAw",sourceUrl:"https://www.ftvnews.com.tw/news/detail/2023828W0213",sourceLabel:"查看民視原始報導",featured:true
+      },
+      {
+        id:"heizaixiong-vlog",type:"video",categories:["youtube"],media:"YouTube",creator:"黑仔熊",date:"2022-02-09",
+        title:"這才不是我熟悉的溫泉魚｜礁溪 VLOG",
+        description:"創作者以 VLOG 記錄礁溪行程及現場不同魚池的互動過程。",
+        youtubeId:"baV_VKE4QMY",sourceUrl:"https://www.youtube.com/watch?v=baV_VKE4QMY",sourceLabel:"到 YouTube 看原片"
+      },
+      {
+        id:"lee-yi-jiaoxi",type:"video",categories:["youtube","travel"],media:"YouTube",creator:"李懿",date:"2020-01-04",
+        title:"在地推薦系列｜礁溪巨無霸溫泉魚體驗",
+        description:"旅遊創作者走訪礁溪，從在地行程角度記錄重口味溫泉魚的現場體驗。",
+        youtubeId:"P5h70sOFYuE",sourceUrl:"https://www.youtube.com/watch?v=P5h70sOFYuE",sourceLabel:"到 YouTube 看原片"
+      },
+      {
+        id:"tvbs-supertaste-352663",type:"article",categories:["news","travel"],media:"TVBS 食尚玩家",logo:"TVBS",date:"2024-12-12",
+        title:"《天菜就醬吃》宜蘭篇店家資訊",
+        description:"食尚玩家節目頁整理宜蘭行程，並收錄礁溪湯圍溝重口味溫泉魚的店家資訊。",
+        sourceUrl:"https://supertaste.tvbs.com.tw/review/352663",sourceLabel:"查看原始報導"
+      },
+      {
+        id:"udn-travel-8446413",type:"article",categories:["news","travel"],media:"聯合新聞網／旅遊",logo:"UDN",date:"2024-12-29",
+        title:"礁溪溫泉小旅行專題",
+        description:"聯合新聞網旅遊報導整理礁溪特色行程，包含重口味溫泉魚的互動體驗。",
+        sourceUrl:"https://travel.udn.com/travel/story/7210/8446413",sourceLabel:"查看原始報導"
+      },
+      {
+        id:"nownews-6268298",type:"article",categories:["news","travel"],media:"NOWnews／ReadyGo",logo:"NOW",date:"2023-09-25",
+        title:"宜蘭二日遊｜礁溪行程專題",
+        description:"NOWnews 與 ReadyGo 的宜蘭二日遊內容，將重口味溫泉魚列入礁溪行程。",
+        sourceUrl:"https://www.nownews.com/news/6268298",sourceLabel:"查看原始報導"
+      },
+      {
+        id:"walkerland-297536",type:"article",categories:["travel"],media:"WalkerLand 窩客島",logo:"WL",date:"2021-04-20",
+        title:"礁溪景點｜親子旅遊實際體驗",
+        description:"作者從親子旅遊角度記錄店內不同魚種、空間配置與現場互動感受。",
+        sourceUrl:"https://www.walkerland.com.tw/article/view/297536",sourceLabel:"查看原始文章"
+      },
+      {
+        id:"tabizine-442393",type:"article",categories:["travel","overseas"],media:"TABIZINE",logo:"JP",date:"2022-01-07",
+        title:"日本旅遊媒體礁溪現地報導",
+        description:"日本旅遊媒體以海外旅客視角走訪礁溪，介紹店內多種魚池與實際互動過程。",
+        sourceUrl:"https://tabizine.jp/2022/01/07/442393/",sourceLabel:"查看原始報導"
+      }
+    ];
+
+    const state={filter:"all",liffReady:false};
+    const videoGrid=document.getElementById("videoGrid");
+    const articleGrid=document.getElementById("articleGrid");
+    const emptyState=document.getElementById("emptyState");
+
+    function escapeHtml(value){
+      return String(value==null?"":value).replace(/[&<>'"]/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
+    }
+
+    function validExternalUrl(value){
+      try{const url=new URL(String(value||""));return url.protocol==="https:"?url.href:""}catch(_error){return ""}
+    }
+
+    function formatDate(value){return escapeHtml(String(value||"").replaceAll("-","."))}
+
+    function actionMarkup(item,primary){
+      const url=item.disabled?"":validExternalUrl(item.sourceUrl);
+      if(!url)return '<span class="btn disabled" aria-disabled="true">原始連結待確認</span>';
+      return '<a class="btn external'+(primary?' primary':'')+'" href="'+escapeHtml(url)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(item.sourceLabel||"查看原始內容")+'</a>';
+    }
+
+    function videoMarkup(item){
+      const videoId=/^[A-Za-z0-9_-]{11}$/.test(item.youtubeId||"")?item.youtubeId:"";
+      const values=[item.media,item.creator,item.date?String(item.date).replaceAll("-","."):""].filter(Boolean);
+      const meta=values.map((value,index)=>index===0?'<span class="badge">'+escapeHtml(value)+'</span>':'<span>'+escapeHtml(value)+'</span>').join("");
+      return '<article class="card media-item'+(item.featured?' featured':'')+'" data-id="'+escapeHtml(item.id)+'">'+
+        '<div class="video" data-video-id="'+escapeHtml(videoId)+'" data-title="'+escapeHtml(item.title)+'">'+
+          '<button class="video-load" type="button"'+(videoId?'':' disabled')+'><span class="play-icon" aria-hidden="true">▶</span><span class="video-load-text"><strong>播放影片</strong><span>YouTube 官方播放器</span></span></button>'+
+        '</div><div class="card-body"><div class="meta">'+meta+'</div><div class="title">'+escapeHtml(item.title)+'</div><p class="desc">'+escapeHtml(item.description)+'</p><div class="actions">'+actionMarkup(item,item.featured)+'</div></div></article>';
+    }
+
+    function articleMarkup(item){
+      const meta='<span class="badge">'+escapeHtml(item.media)+'</span>'+(item.date?'<span>'+formatDate(item.date)+'</span>':'');
+      return '<article class="card card-body article media-item" data-id="'+escapeHtml(item.id)+'"><div class="logo" aria-hidden="true">'+escapeHtml(item.logo||"MEDIA")+'</div><div><div class="meta">'+meta+'</div><div class="title">'+escapeHtml(item.title)+'</div><p class="desc">'+escapeHtml(item.description)+'</p></div><div class="article-actions">'+actionMarkup(item,false)+'</div></article>';
+    }
+
+    function visibleItems(){return MEDIA_ITEMS.filter(item=>state.filter==="all"||item.categories.includes(state.filter))}
+
+    function render(){
+      const visible=visibleItems();
+      const videos=visible.filter(item=>item.type==="video");
+      const articles=visible.filter(item=>item.type==="article");
+      videoGrid.innerHTML=videos.map(videoMarkup).join("");
+      articleGrid.innerHTML=articles.map(articleMarkup).join("");
+      document.getElementById("videoCount").textContent=videos.length?videos.length+" 則":"";
+      document.getElementById("articleCount").textContent=articles.length?articles.length+" 則":"";
+      videoGrid.previousElementSibling.classList.toggle("hidden",videos.length===0);
+      videoGrid.classList.toggle("hidden",videos.length===0);
+      articleGrid.previousElementSibling.classList.toggle("hidden",articles.length===0);
+      articleGrid.classList.toggle("hidden",articles.length===0);
+      emptyState.classList.toggle("hidden",visible.length!==0);
+    }
+
+    function loadVideo(container){
+      const videoId=container.dataset.videoId||"";
+      if(!/^[A-Za-z0-9_-]{11}$/.test(videoId))return;
+      const iframe=document.createElement("iframe");
+      iframe.loading="lazy";
+      iframe.src="https://www.youtube-nocookie.com/embed/"+encodeURIComponent(videoId)+"?playsinline=1&rel=0";
+      iframe.title=container.dataset.title||"YouTube 影片";
+      iframe.allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+      iframe.allowFullscreen=true;
+      container.replaceChildren(iframe);
+    }
+
+    function openExternal(targetUrl){
+      const url=validExternalUrl(targetUrl);
+      if(!url)return;
+      try{
+        if(state.liffReady&&window.liff&&liff.isInClient()){
+          liff.openWindow({url,external:true});
+          return;
+        }
+      }catch(error){console.warn("LIFF openWindow fallback",error)}
+      const opened=window.open(url,"_blank","noopener,noreferrer");
+      if(opened)opened.opener=null;
+    }
+
+    async function initLiff(){
+      if(!window.liff)return;
+      try{await liff.init({liffId:LIFF_ID});state.liffReady=true}catch(error){console.warn("LIFF init unavailable; external links remain usable",error)}
+    }
+
+    document.querySelector(".filters").addEventListener("click",event=>{
+      const button=event.target.closest(".filter");
+      if(!button)return;
+      state.filter=button.dataset.filter||"all";
+      document.querySelectorAll(".filter").forEach(item=>{
+        const active=item===button;
+        item.classList.toggle("active",active);
+        item.setAttribute("aria-pressed",String(active));
+      });
+      render();
+    });
+
+    document.querySelector(".content").addEventListener("click",event=>{
+      const playButton=event.target.closest(".video-load");
+      if(playButton){loadVideo(playButton.closest(".video"));return}
+      const external=event.target.closest("a.external");
+      if(external){event.preventDefault();openExternal(external.href)}
+    });
+
+    render();
+    window.addEventListener("load",initLiff,{once:true});
   </script>
 </body>
 </html>
