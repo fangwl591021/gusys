@@ -278,18 +278,6 @@ async function ensureMemberShareSchema(env) {
   ]);
 }
 
-function buildMemberShareMotherUrl(env, shareCode) {
-  const normalized = normalizeMemberShareCode(shareCode);
-  const url = new URL(motherMemberBaseUrl(env));
-  url.searchParams.set("ref", normalized);
-  url.searchParams.set("source", "member_share");
-  const bindUrl = new URL(`${workerPublicBase(env)}/api/referrals/bind`);
-  bindUrl.searchParams.set("share", normalized);
-  bindUrl.searchParams.set("source", "mother_site");
-  url.searchParams.set("gusys_bind", bindUrl.toString());
-  return url.toString();
-}
-
 async function getOrCreateMemberShareLink(env, event) {
   const profile = await ensureCustomerFromLineEvent(env, event);
   if (!profile?.lineUserId) throw new Error("member_identity_missing");
@@ -339,10 +327,10 @@ async function getOrCreateMemberShareLink(env, event) {
 
 function buildLineMemberShareFlexMessage(share) {
   const inviteUrl = String(share.inviteUrl || "");
-  const shareText = `邀請你加入 HookTea 會員：\n${inviteUrl}`;
+  const shareText = `邀請你加入宜蘭礁溪重口味溫泉魚會員：\n${inviteUrl}`;
   return {
     type: "flex",
-    altText: "HookTea 推薦好友",
+    altText: "宜蘭礁溪重口味溫泉魚｜推薦好友",
     contents: {
       type: "bubble",
       size: "mega",
@@ -3334,7 +3322,7 @@ async function bindCustomerToSalesRep(request, env) {
   return json({ ok: true, data: result });
 }
 
-async function redirectMemberShare(request, env, rawShareCode) {
+async function recordMemberShareOpen(env, rawShareCode, source) {
   await ensureMemberShareSchema(env);
   const shareCode = normalizeMemberShareCode(rawShareCode);
   const row = await env.DB.prepare(`
@@ -3343,7 +3331,7 @@ async function redirectMemberShare(request, env, rawShareCode) {
     WHERE share_code = ?
     LIMIT 1
   `).bind(shareCode).first();
-  if (!row) return new Response("這個分享連結不存在或已失效。", { status: 404, headers: TEXT_HEADERS });
+  if (!row) return null;
   await env.DB.batch([
     env.DB.prepare(`
       UPDATE member_share_links
@@ -3353,10 +3341,20 @@ async function redirectMemberShare(request, env, rawShareCode) {
     env.DB.prepare(`
       INSERT INTO member_referral_events (
         id, share_code, owner_line_user_id, referred_line_user_id, event_type, source, created_at
-      ) VALUES (?, ?, ?, '', 'link_opened', 'share_redirect', datetime('now'))
-    `).bind(crypto.randomUUID(), shareCode, row.ownerLineUserId),
+      ) VALUES (?, ?, ?, '', 'link_opened', ?, datetime('now'))
+    `).bind(crypto.randomUUID(), shareCode, row.ownerLineUserId, String(source || "share_link").slice(0, 80)),
   ]);
-  return Response.redirect(buildMemberShareMotherUrl(env, shareCode), 302);
+  return row;
+}
+
+async function redirectMemberShare(request, env, rawShareCode) {
+  const row = await recordMemberShareOpen(env, rawShareCode, "legacy_share_redirect");
+  if (!row) return new Response("這個分享連結不存在或已失效。", { status: 404, headers: TEXT_HEADERS });
+  const shareCode = row.shareCode;
+  const settings = await getPublicHookteaSettings(env);
+  const inviteUrl = buildMemberShareLiffUrl(settings.liff_id || env.LINE_LIFF_ID, shareCode);
+  if (!inviteUrl) return new Response("尚未設定前台推薦好友 LIFF ID。", { status: 503, headers: TEXT_HEADERS });
+  return Response.redirect(inviteUrl, 302);
 }
 
 async function bindMemberReferral(request, env) {
@@ -3369,7 +3367,7 @@ async function bindMemberReferral(request, env) {
   const lineUserId = String(payload.lineUserId || payload.LINE_user_id || payload.uid || payload.userId || "").trim();
   if (!shareCode) return json({ ok: false, error: "missing_share_code" }, 400);
   if (!lineUserId || !lineUserId.startsWith("U")) {
-    return json({ ok: false, error: "missing_line_user_id", message: "請由母站 LINE 登入後帶 LINE UID 回寫 Gusys" }, 400);
+    return json({ ok: false, error: "missing_line_user_id", message: "請由 LINE LIFF 開啟並完成登入" }, 400);
   }
   const share = await env.DB.prepare(`
     SELECT share_code AS shareCode, owner_line_user_id AS ownerLineUserId
@@ -3435,7 +3433,7 @@ async function bindMemberReferral(request, env) {
     share.ownerLineUserId,
     lineUserId,
     attribution,
-    String(payload.source || "mother_site").slice(0, 80),
+    String(payload.source || "shop_liff").slice(0, 80),
   ).run();
   const memberSync = await syncWetwMember(env, {
     lineUserId,
@@ -6215,9 +6213,10 @@ async function renderShopPage(request, env) {
     loadError = String(error?.message || error);
   }
   const liffState = String(url.searchParams.get("liff.state") || "").trim();
-  const memberShareCode = memberShareCodeFromShopUrl(url);
+  let memberShareCode = memberShareCodeFromShopUrl(url);
   if (memberShareCode) {
-    return Response.redirect(`${workerPublicBase(env)}/r/${encodeURIComponent(memberShareCode)}`, 302);
+    const share = await recordMemberShareOpen(env, memberShareCode, "shop_liff_open").catch(() => null);
+    if (!share) memberShareCode = "";
   }
   const isHygieneView = url.pathname === "/shop/hygiene"
     || url.searchParams.get("view") === "hygiene"
@@ -6233,7 +6232,7 @@ async function renderShopPage(request, env) {
   const heroBadge = String(settings.shop_hero_badge || "").trim();
   const heroSubtitle = String(settings.shop_hero_subtitle || "讓生活有光，讓選擇有路").trim();
   const heroImage = String(settings.shop_banner_image || settings.banner_image || products.find(p => p.image)?.image || "").trim();
-  const data = JSON.stringify({ settings, products, loadError, brandTitle, heroTitle, heroBadge, heroSubtitle, heroImage }).replace(/</g, "\\u003c");
+  const data = JSON.stringify({ settings, products, loadError, brandTitle, heroTitle, heroBadge, heroSubtitle, heroImage, memberShareCode }).replace(/</g, "\\u003c");
   return new Response(`<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -6320,9 +6319,10 @@ async function renderShopPage(request, env) {
     function memberAddressValue(){return String(memberProfile?.address||"").trim()}
     function isMemberRegistered(){return !!(memberProfile&&memberNameValue()&&memberPhoneValue())}
     function applySameAsMember(){if(!$('sameAsMember')?.checked)return;if(!isMemberRegistered()){showToast('請先完成註冊資料');openProfileForm();return}$('shippingName').value=memberNameValue();$('shippingPhone').value=memberPhoneValue();$('shippingAddress').value=memberAddressValue();}
-    async function initLiff(){try{updateMemberPanel(null);if(!settings.liff_id||!window.liff){showToast("尚未設定 LIFF ID");return}await liff.init({liffId:settings.liff_id});if(!liff.isLoggedIn()){showToast("正在進行 LINE 登入");liff.login({redirectUri:location.href.split("#")[0]});return}const profile=await liff.getProfile();$("lineUserId").value=profile.userId||"";await syncMemberProfile(profile);}catch(e){console.warn(e);showToast("LINE 登入失敗："+(e.message||e))}}
+    async function initLiff(){try{updateMemberPanel(null);if(!settings.liff_id||!window.liff){showToast("尚未設定 LIFF ID");return}await liff.init({liffId:settings.liff_id});if(!liff.isLoggedIn()){showToast("正在進行 LINE 登入");liff.login({redirectUri:location.href.split("#")[0]});return}const profile=await liff.getProfile();$("lineUserId").value=profile.userId||"";await syncMemberProfile(profile);await bindReferralFromShare(profile);}catch(e){console.warn(e);showToast("LINE 登入失敗："+(e.message||e))}}
     function updateMemberPanel(profile){const name=profile?.displayName||profile?.name||"尚未登入";const uid=profile?.lineUserId||profile?.userId||"請用 LINE LIFF 開啟以取得身分";const pic=profile?.pictureUrl||"";const registered=!!(profile&&String(profile.displayName||"").trim()&&String(profile.phone||"").trim());$("memberPanelName").textContent=name;$("memberPanelUid").textContent=uid;$("memberPanelStatus").textContent=registered?"完成註冊":"未完成，點我註冊";$("memberStatusChip").classList.toggle("warn",!registered);$("memberPanelPhoto").innerHTML=pic?'<img src="'+esc(pic)+'" alt="">':(name||"U").slice(0,1);$("lineAvatar").innerHTML=pic?'<img src="'+esc(pic)+'" alt="">':(name||"U").slice(0,1);applySameAsMember();}
     async function syncMemberProfile(profile){memberProfile={lineUserId:profile.userId,displayName:profile.displayName,pictureUrl:profile.pictureUrl||"",phone:profile.phone||"",address:profile.address||""};updateMemberPanel(memberProfile);try{const res=await fetch('/api/shop/member',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(Object.assign({},memberProfile,{profileOnly:true}))});const body=await res.json();if(res.ok&&body.ok&&body.data){memberProfile=Object.assign({},memberProfile,body.data);updateMemberPanel(memberProfile)}await loadMemberPoints(memberProfile.lineUserId);}catch(e){console.warn(e);showToast("會員資料同步失敗")}}
+    async function bindReferralFromShare(profile){const share=String(initial.memberShareCode||"").trim();const uid=String(profile?.userId||"").trim();if(!share||!uid)return;const storageKey="gusys-referral:"+share+":"+uid;if(sessionStorage.getItem(storageKey)==="done")return;try{const res=await fetch('/api/referrals/bind',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({share,lineUserId:uid,displayName:profile.displayName||"",pictureUrl:profile.pictureUrl||"",source:'shop_liff'})});const body=await res.json();if(!res.ok||body.ok===false)throw new Error(body.message||body.error||('HTTP '+res.status));sessionStorage.setItem(storageKey,"done");const result=String(body.data?.attribution||"");if(result==="bound"||result==="already_bound_to_owner")showToast("推薦歸屬已完成");}catch(e){console.warn("推薦歸屬失敗",e);showToast("推薦歸屬暫時無法完成")}}
     async function loadMemberPoints(lineUserId){if(!lineUserId)return;$("memberPanelPoints").textContent="讀取中";try{const res=await fetch('/api/points/list?pointType=all&lineUserId='+encodeURIComponent(lineUserId));const data=await res.json();const nested=data?.data?.data?.data||data?.data?.data||data?.data||{};const logs=Array.isArray(data.logs)?data.logs:(Array.isArray(nested.list)?nested.list:(Array.isArray(data.items)?data.items:[]));const total=logs.length?logs.reduce((sum,log)=>sum+(Number(log.get_point||log.points||log.amount||log.point||0)||0),0):Number(data.balance||0)||0;memberPointBalance=total;$("memberPanelPoints").textContent=total.toLocaleString("zh-TW");renderCart();}catch(e){memberPointBalance=0;$("memberPanelPoints").textContent="讀取失敗";renderCart();}}
     function openProfileForm(){if(!memberProfile){showToast('請先用 LINE 登入');return}$("registerName").value=memberNameValue();$("registerPhone").value=memberPhoneValue();$("registerAddress").value=memberAddressValue();$("profileStatus").textContent="";$("profileStatus").className="status";$("profileModal").classList.add("open")}
     function closeProfileForm(){$("profileModal").classList.remove("open")}
