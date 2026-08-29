@@ -65,7 +65,7 @@ const LINE_NEARBY_PARKING_PLACES = [
   { name: "川湯春天溫泉酒店站前停車場", proximity: "距湯圍溝公園約 202 公尺" },
 ];
 const LINE_VISITOR_PREP_LINKS = [
-  { label: "礁溪即時天氣", uri: "https://www.cwa.gov.tw/V8/C/W/OBS_Station.html?ID=C0U600" },
+  { label: "礁溪即時天氣", uri: "https://www.cwa.gov.tw/V8/C/W/Town/Town.html?TID=1000205" },
   { label: "礁溪站動態", uri: "https://tip.railway.gov.tw/tra-tip-web/tip/tip00H/tipH41/viewStaInfo/7210" },
   { label: "宜蘭即時路況", uri: "https://ilcpb.ivs.hinet.net/public/ilcpb_live_cam" },
 ];
