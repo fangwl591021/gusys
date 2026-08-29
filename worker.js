@@ -23,6 +23,11 @@ const LINE_KEYWORD_MENU_KEYWORDS = new Set([
   "入池衛生須知",
   "數位集點卡",
   "礁溪順遊推薦",
+  "礁溪推薦｜食",
+  "礁溪推薦｜宿",
+  "礁溪推薦｜遊",
+  "礁溪推薦｜購",
+  "礁溪推薦｜行",
   "常見問題(FAQ)",
   "優選商城",
   "聯絡客服",
@@ -31,6 +36,7 @@ const LINE_KEYWORD_MENU_KEYWORDS = new Set([
 const LINE_NAVIGATION_MENU_KEYWORD = "導航與停車指南";
 const LINE_POOL_HYGIENE_MENU_KEYWORD = "入池衛生須知";
 const LINE_BUSINESS_HOURS_MENU_KEYWORD = "營業時間與公休";
+const LINE_JIAOXI_RECOMMENDATION_MENU_KEYWORD = "礁溪順遊推薦";
 const LINE_MEMBER_SHARE_MENU_KEYWORDS = new Set(["分享好友拿優惠", "會員分享", "分享好友"]);
 const LINE_KEYWORD_MENU_REPLIES = new Map([
   ["最新活動", "📌 最新活動\n\n目前活動資訊以現場與 LINE 官方帳號公告為準。\n\n• 一般散客無須預約，營業時間內直接到店即可\n• 當日購票不限時間，蓋章後可重複進場\n\n如需確認當日活動，請點選「聯絡客服」。"],
@@ -69,6 +75,65 @@ const LINE_VISITOR_PREP_LINKS = [
   { label: "礁溪站動態", uri: "https://tip.railway.gov.tw/tra-tip-web/tip/tip00H/tipH41/viewStaInfo/7210" },
   { label: "宜蘭即時路況", uri: "https://ilcpb.ivs.hinet.net/public/ilcpb_live_cam" },
 ];
+const LINE_JIAOXI_RECOMMENDATION_CATEGORIES = [
+  { key: "food", label: "食｜在地美食", keyword: "礁溪推薦｜食", emoji: "🍜", title: "礁溪在地美食" },
+  { key: "stay", label: "宿｜特色住宿", keyword: "礁溪推薦｜宿", emoji: "🏨", title: "礁溪特色住宿" },
+  { key: "visit", label: "遊｜順遊景點", keyword: "礁溪推薦｜遊", emoji: "🌿", title: "礁溪順遊景點" },
+  { key: "shop", label: "購｜在地好物", keyword: "礁溪推薦｜購", emoji: "🛍️", title: "礁溪在地好物" },
+  { key: "transport", label: "行｜交通服務", keyword: "礁溪推薦｜行", emoji: "🛵", title: "礁溪交通服務" },
+];
+const LINE_JIAOXI_RECOMMENDATIONS = {
+  food: {
+    image: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=900&q=80",
+    items: [
+      { name: "樂漁 鮮魚定食×咖啡", phone: "0975001801" },
+      { name: "小食粑", phone: "0965345663" },
+      { name: "初 firstday food 早午餐", phone: "039881513" },
+      { name: "空ㄟ農場", phone: "0912089795" },
+      { name: "義眾魚羹之家", phone: "039881060" },
+    ],
+  },
+  stay: {
+    image: "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=900&q=80",
+    items: [
+      { name: "礁溪沐夏民宿", phone: "0955323655" },
+      { name: "瑪林好室 Mori House", phone: "0928554033" },
+      { name: "廸布斯民宿", phone: "0927963513" },
+      { name: "枂舍 Yueshe House", phone: "0958487958" },
+      { name: "礁溪木BOX田妍山色", phone: "0952670940" },
+    ],
+  },
+  visit: {
+    image: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=900&q=80",
+    items: [
+      { name: "湯圍溝溫泉公園", phone: "039872998", phoneLabel: "旅遊洽詢" },
+      { name: "五峰旗瀑布", phone: "039872998", phoneLabel: "旅遊洽詢" },
+      { name: "林美石磐步道", phone: "039872998", phoneLabel: "旅遊洽詢" },
+      { name: "礁溪溫泉公園", phone: "039872998", phoneLabel: "旅遊洽詢" },
+      { name: "龍潭湖風景區", phone: "039872998", phoneLabel: "旅遊洽詢" },
+    ],
+  },
+  shop: {
+    image: "https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=900&q=80",
+    items: [
+      { name: "抹茶山伴手禮 礁溪店", phone: "039883370" },
+      { name: "阿萬之家 礁溪店", phone: "039870620" },
+      { name: "奕順軒 礁溪店", phone: "039883058" },
+      { name: "礁溪三源行", phone: "039883329" },
+      { name: "元融 礁溪老爺門市", phone: "039885211" },
+    ],
+  },
+  transport: {
+    image: "https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=900&q=80",
+    items: [
+      { name: "陸零租車 礁溪轉運站服務點", phone: "0983505914" },
+      { name: "灰熊 MOTOR 租車 礁溪店", phone: "039883697" },
+      { name: "ZOCHA 礁溪站前無人店", phone: "0277136860" },
+      { name: "葛瑪蘭客運 礁溪站", phone: "039876739" },
+      { name: "礁溪轉運站旅遊服務中心", phone: "039872998" },
+    ],
+  },
+};
 
 export default {
   async fetch(request, env, ctx) {
@@ -855,6 +920,95 @@ function buildLineBusinessHoursMessage() {
   };
 }
 
+function lineJiaoxiRecommendationCategory(keyword) {
+  return LINE_JIAOXI_RECOMMENDATION_CATEGORIES.find(category => category.keyword === keyword) || null;
+}
+
+function buildLineJiaoxiRecommendationQuickReply() {
+  return {
+    items: LINE_JIAOXI_RECOMMENDATION_CATEGORIES.map(category => ({
+      type: "action",
+      action: {
+        type: "message",
+        label: category.label,
+        text: category.keyword,
+      },
+    })),
+  };
+}
+
+function buildLineJiaoxiRecommendationMenuMessage() {
+  return {
+    type: "text",
+    text: `${LINE_KEYWORD_MENU_REPLIES.get(LINE_JIAOXI_RECOMMENDATION_MENU_KEYWORD)}\n\n請點選下方「食、宿、遊、購、行」查看每類 5 個推薦。`,
+    quickReply: buildLineJiaoxiRecommendationQuickReply(),
+  };
+}
+
+function formatTaiwanPhone(phone) {
+  const value = String(phone || "").replace(/\D/g, "");
+  if (/^02\d{8}$/.test(value)) return `${value.slice(0, 2)}-${value.slice(2, 6)}-${value.slice(6)}`;
+  if (/^0[3-8]\d{7}$/.test(value)) return `${value.slice(0, 2)}-${value.slice(2, 5)}-${value.slice(5)}`;
+  if (/^09\d{8}$/.test(value)) return `${value.slice(0, 4)}-${value.slice(4, 7)}-${value.slice(7)}`;
+  return value;
+}
+
+function buildLineJiaoxiRecommendationFlexMessage(category) {
+  const recommendation = LINE_JIAOXI_RECOMMENDATIONS[category.key];
+  const bubbles = recommendation.items.map((place, index) => ({
+    type: "bubble",
+    size: "kilo",
+    hero: {
+      type: "image",
+      url: recommendation.image,
+      size: "full",
+      aspectRatio: "20:13",
+      aspectMode: "cover",
+      action: { type: "uri", label: "查看 Google Maps", uri: googleMapsSearchUrl(`${place.name} 宜蘭礁溪`) },
+    },
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "sm",
+      paddingAll: "16px",
+      contents: [
+        { type: "text", text: `${category.emoji} ${category.title} ${index + 1}`, size: "xs", weight: "bold", color: "#0F766E" },
+        { type: "text", text: place.name, size: "lg", weight: "bold", color: "#0F172A", wrap: true, maxLines: 2 },
+        { type: "text", text: "★★★★★ Google 評論採 5 星制", size: "xs", color: "#D97706", wrap: true },
+        { type: "text", text: `${place.phoneLabel || "電話"}：${formatTaiwanPhone(place.phone)}`, size: "sm", color: "#475569", wrap: true },
+        { type: "text", text: "照片為分類示意；評分、營業狀態與店家資訊請以 Google Maps 當下顯示為準。", size: "xxs", color: "#94A3B8", wrap: true },
+      ],
+    },
+    footer: {
+      type: "box",
+      layout: "vertical",
+      spacing: "sm",
+      paddingAll: "14px",
+      contents: [
+        {
+          type: "button",
+          style: "primary",
+          color: "#06C755",
+          height: "sm",
+          action: { type: "uri", label: "開始導航", uri: googleMapsDirectionsUrl(`${place.name} 宜蘭礁溪`) },
+        },
+        {
+          type: "button",
+          style: "link",
+          height: "sm",
+          action: { type: "uri", label: place.phoneLabel || "撥打電話", uri: `tel:${place.phone}` },
+        },
+      ],
+    },
+  }));
+  return {
+    type: "flex",
+    altText: `${category.title}：5 個 Google Maps 推薦地點`,
+    contents: { type: "carousel", contents: bubbles },
+    quickReply: buildLineJiaoxiRecommendationQuickReply(),
+  };
+}
+
 function buildLineParkingFlexMessage() {
   const storeMapUrl = googleMapsDirectionsUrl(`${LINE_STORE_LOCATION.name} ${LINE_STORE_LOCATION.address}`);
   const bubbles = LINE_NEARBY_PARKING_PLACES.map((place, index) => ({
@@ -1056,13 +1210,15 @@ async function buildLineKeywordMenuReplyDecision(env, events) {
     const isParkingGuide = target.keyword === LINE_NAVIGATION_MENU_KEYWORD;
     const isPoolHygieneGuide = target.keyword === LINE_POOL_HYGIENE_MENU_KEYWORD;
     const isBusinessHours = target.keyword === LINE_BUSINESS_HOURS_MENU_KEYWORD;
-    const message = isParkingGuide
-      ? buildLineParkingFlexMessage()
-      : isPoolHygieneGuide
-        ? await buildLinePoolHygieneFlexMessage(env)
-        : isBusinessHours
-          ? buildLineBusinessHoursMessage()
-          : { type: "text", text: LINE_KEYWORD_MENU_REPLIES.get(target.keyword) || "請點選「聯絡客服」留言詢問。" };
+    const isJiaoxiRecommendationMenu = target.keyword === LINE_JIAOXI_RECOMMENDATION_MENU_KEYWORD;
+    const jiaoxiRecommendationCategory = lineJiaoxiRecommendationCategory(target.keyword);
+    let message;
+    if (isParkingGuide) message = buildLineParkingFlexMessage();
+    else if (isPoolHygieneGuide) message = await buildLinePoolHygieneFlexMessage(env);
+    else if (isBusinessHours) message = buildLineBusinessHoursMessage();
+    else if (isJiaoxiRecommendationMenu) message = buildLineJiaoxiRecommendationMenuMessage();
+    else if (jiaoxiRecommendationCategory) message = buildLineJiaoxiRecommendationFlexMessage(jiaoxiRecommendationCategory);
+    else message = { type: "text", text: LINE_KEYWORD_MENU_REPLIES.get(target.keyword) || "請點選「聯絡客服」留言詢問。" };
     return {
       handled: true,
       outcome: "keyword",
