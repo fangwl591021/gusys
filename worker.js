@@ -15,7 +15,7 @@ const HTML_HEADERS = {
   "cache-control": "no-store",
 };
 
-const LINE_AI_MENU_KEYWORDS = new Set([
+const LINE_KEYWORD_MENU_KEYWORDS = new Set([
   "最新活動",
   "收費標準與魚種",
   "導航與停車指南",
@@ -24,11 +24,23 @@ const LINE_AI_MENU_KEYWORDS = new Set([
   "數位集點卡",
   "礁溪順遊推薦",
   "常見問題(FAQ)",
+  "優選商城",
+  "聯絡客服",
 ]);
 
 const LINE_NAVIGATION_MENU_KEYWORD = "導航與停車指南";
 const LINE_POOL_HYGIENE_MENU_KEYWORD = "入池衛生須知";
 const LINE_MEMBER_SHARE_MENU_KEYWORDS = new Set(["分享好友拿優惠", "會員分享", "分享好友"]);
+const LINE_KEYWORD_MENU_REPLIES = new Map([
+  ["最新活動", "📌 最新活動\n\n目前活動資訊以現場與 LINE 官方帳號公告為準。\n\n• 一般散客無須預約，營業時間內直接到店即可\n• 當日購票不限時間，蓋章後可重複進場\n\n如需確認當日活動，請點選「聯絡客服」。"],
+  ["收費標準與魚種", "🎫 收費標準與魚種\n\n• 成人票 100 元\n• 兒童票 80 元（4 歲以下免費）\n• 當天不限時間，蓋章可重複進場\n• 現場共有 12 種不同互動感受\n• 目前僅收現金\n\n平日優惠與團體方案請以現場公告為準。"],
+  ["營業時間與公休", "🕘 營業時間與公休\n\n• 平日 09:00–22:00\n• 假日 09:00–23:00\n• 全年無休\n\n特殊天候或臨時調整，請以 LINE 官方帳號最新公告為準。"],
+  ["數位集點卡", "🎁 集點服務\n\n目前重口味溫泉魚沒有提供集點或點數服務。\n如有其他優惠活動，請以 LINE 官方帳號最新公告為準。"],
+  ["礁溪順遊推薦", "📍 礁溪順遊推薦\n\n可將重口味溫泉魚與湯圍溝溫泉公園、礁溪市區散步及在地美食安排在同一段行程。\n\n店家位於礁溪市區、鄰近湯圍溝，適合規劃輕鬆的半日遊。"],
+  ["常見問題(FAQ)", "💬 常見問題\n\n可透過圖文選單查看收費、營業時間、導航停車與入池須知。\n\n其他問題請點選「聯絡客服」，並直接留言。"],
+  ["優選商城", "🛒 重口味優選商城\n\nhttps://gusys.fangwl591021.workers.dev/shop"],
+  ["聯絡客服", "📞 聯絡客服\n\n請直接在此聊天室留下您的問題，工作人員會協助回覆。\n\n電話：0985-197-664"],
+]);
 const LINE_POOL_HYGIENE_ASSET_ID = "asset_5d864d4b-66c6-45a9-89ef-933578d77a0d";
 const LINE_POOL_HYGIENE_RULES = [
   ["入池洗腳", "入池前請先洗腳，共同維護水質。"],
@@ -480,12 +492,16 @@ async function handleLineWebhook(request, env, ctx) {
     }));
   }
 
-  const [aiDecision, motherResult] = await Promise.all([
-    buildLineAiMenuReplyDecision(env, events).catch(error => {
-      console.error(JSON.stringify({ level: "error", message: "line_ai_menu_reply_failed", error: String(error?.message || error) }));
-      return buildLineAiFailureDecision(events);
+  const [menuDecision, motherResult, ruleReplyPayload] = await Promise.all([
+    buildLineKeywordMenuReplyDecision(env, events).catch(error => {
+      console.error(JSON.stringify({ level: "error", message: "line_keyword_menu_reply_failed", error: String(error?.message || error) }));
+      return buildLineKeywordFailureDecision(events);
     }),
     forwardToMotherWebhook(env, rawBody, signature),
+    buildReplyRulePayload(env, events).catch(error => {
+      console.error(JSON.stringify({ level: "error", message: "reply_rule_failed", error: String(error?.message || error) }));
+      return null;
+    }),
   ]);
 
   if (env.DB) {
@@ -498,29 +514,27 @@ async function handleLineWebhook(request, env, ctx) {
     eventCount: events.length,
     motherStatus: motherResult.status,
     motherOk: motherResult.ok,
-    aiHandled: aiDecision.handled,
-    aiOutcome: aiDecision.outcome,
+    menuHandled: menuDecision.handled,
+    menuOutcome: menuDecision.outcome,
+    replyRuleMatched: Boolean(ruleReplyPayload),
     receivedAt: new Date().toISOString(),
   });
 
-  const ruleReplyPayload = (aiDecision.handled || motherResult.replyPayload) ? null : await buildReplyRulePayload(env, events).catch(error => {
-    console.error(JSON.stringify({ level: "error", message: "reply_rule_failed", error: String(error?.message || error) }));
-    return null;
-  });
-  const replyPayload = aiDecision.handled
-    ? aiDecision.replyPayload
-    : motherResult.replyPayload || ruleReplyPayload || buildLocalKeywordReplyPayload(events, env);
+  const replyPayload = ruleReplyPayload
+    || (menuDecision.handled ? menuDecision.replyPayload : null)
+    || motherResult.replyPayload
+    || buildLocalKeywordReplyPayload(events, env);
   if (replyPayload && env.LINE_CHANNEL_ACCESS_TOKEN) {
     const replyResult = await replyLineMessage(env, replyPayload);
-    if (env.DB && aiDecision.eventKey) {
-      ctx.waitUntil(finalizeLineAiDelivery(env, aiDecision, replyResult).catch(error => {
+    if (env.DB && menuDecision.eventKey) {
+      ctx.waitUntil(finalizeLineAiDelivery(env, menuDecision, replyResult).catch(error => {
         console.error(JSON.stringify({ level: "error", message: "line_ai_delivery_record_failed", error: String(error?.message || error) }));
       }));
     }
-    return json({ ok: true, mother: motherResult.summary, ai: aiDecision.summary, reply: replyResult });
+    return json({ ok: true, mother: motherResult.summary, menu: menuDecision.summary, replyRuleMatched: Boolean(ruleReplyPayload), reply: replyResult });
   }
 
-  return json({ ok: true, mother: motherResult.summary, ai: aiDecision.summary, reply: null });
+  return json({ ok: true, mother: motherResult.summary, menu: menuDecision.summary, replyRuleMatched: Boolean(ruleReplyPayload), reply: null });
 }
 
 async function verifyLineSignature(rawBody, signature, channelSecret) {
@@ -560,11 +574,11 @@ async function recordWebhookDebug(env, key, value) {
   `).bind(String(key || "LINE_WEBHOOK_DEBUG"), JSON.stringify(value || {}).slice(0, 12000)).run();
 }
 
-function lineAiMenuEvent(events) {
+function lineKeywordMenuEvent(events) {
   for (const event of Array.isArray(events) ? events : []) {
     if (event?.type !== "message" || event?.message?.type !== "text") continue;
     const keyword = String(event.message.text || "").trim();
-    if (!LINE_AI_MENU_KEYWORDS.has(keyword)) continue;
+    if (!LINE_KEYWORD_MENU_KEYWORDS.has(keyword)) continue;
     const lineUserId = String(event.source?.userId || "").trim();
     const replyToken = String(event.replyToken || "").trim();
     if (!lineUserId || !replyToken) continue;
@@ -716,18 +730,17 @@ function lineAiWarningText(reason, limits) {
   return `您的操作較頻繁，AI 回覆將暫停 ${limits.burstWindowMinutes} 分鐘。若需要立即協助，請輸入「聯絡客服」。`;
 }
 
-function buildLineAiFailureDecision(events) {
-  const target = lineAiMenuEvent(events);
+function buildLineKeywordFailureDecision(events) {
+  const target = lineKeywordMenuEvent(events);
   if (!target) return { handled: false, outcome: "not_applicable", replyPayload: null, summary: { handled: false } };
   return {
     handled: true,
     outcome: "error",
-    eventKey: target.eventKey,
     replyPayload: {
       replyToken: target.replyToken,
-      messages: [{ type: "text", text: "AI 服務目前忙碌中，請稍後再試，或輸入「聯絡客服」。" }],
+      messages: [{ type: "text", text: "選單服務目前忙碌中，請稍後再試。" }],
     },
-    summary: { handled: true, outcome: "error", keyword: target.keyword },
+    summary: { handled: true, outcome: "error", keyword: target.keyword, aiUsed: false },
   };
 }
 
@@ -980,7 +993,7 @@ async function generateLineAiMenuReply(env, target, limits) {
   return responseText.slice(0, 4500);
 }
 
-async function buildLineAiMenuReplyDecision(env, events) {
+async function buildLineKeywordMenuReplyDecision(env, events) {
   const shareTarget = lineMemberShareMenuEvent(events);
   if (shareTarget) {
     if (!env.DB) {
@@ -1010,25 +1023,8 @@ async function buildLineAiMenuReplyDecision(env, events) {
       };
     }
   }
-  const target = lineAiMenuEvent(events);
+  const target = lineKeywordMenuEvent(events);
   if (!target) return { handled: false, outcome: "not_applicable", replyPayload: null, summary: { handled: false } };
-  if (!env.DB) return buildLineAiFailureDecision(events);
-  const limits = lineAiLimits(env);
-  const reservation = await reserveLineAiReply(env, target, limits);
-  if (!reservation.allowed) {
-    const outcome = reservation.duplicate ? "duplicate" : reservation.warning ? "warning" : "blocked";
-    const warningText = reservation.warning ? lineAiWarningText(reservation.reason, limits) : "";
-    return {
-      handled: true,
-      outcome,
-      eventKey: target.eventKey,
-      replyPayload: warningText ? {
-        replyToken: target.replyToken,
-        messages: [{ type: "text", text: warningText }],
-      } : null,
-      summary: { handled: true, outcome, keyword: target.keyword, reason: reservation.reason || "" },
-    };
-  }
   try {
     const isParkingGuide = target.keyword === LINE_NAVIGATION_MENU_KEYWORD;
     const isPoolHygieneGuide = target.keyword === LINE_POOL_HYGIENE_MENU_KEYWORD;
@@ -1036,23 +1032,21 @@ async function buildLineAiMenuReplyDecision(env, events) {
       ? buildLineParkingFlexMessage()
       : isPoolHygieneGuide
         ? await buildLinePoolHygieneFlexMessage(env)
-        : { type: "text", text: await generateLineAiMenuReply(env, target, limits) };
-    const responsePreview = isParkingGuide
-      ? LINE_NEARBY_PARKING_PLACES.map(place => place.name).join("、")
-      : isPoolHygieneGuide
-        ? LINE_POOL_HYGIENE_RULES.map(rule => rule[0]).join("、")
-        : message.text;
-    await updateLineAiReplyUsage(env, target.eventKey, "success", responsePreview);
+        : { type: "text", text: LINE_KEYWORD_MENU_REPLIES.get(target.keyword) || "請點選「聯絡客服」留言詢問。" };
     return {
       handled: true,
-      outcome: "success",
-      eventKey: target.eventKey,
+      outcome: "keyword",
       replyPayload: { replyToken: target.replyToken, messages: [message] },
-      summary: { handled: true, outcome: "success", keyword: target.keyword, responseType: message.type },
+      summary: { handled: true, outcome: "keyword", keyword: target.keyword, responseType: message.type, aiUsed: false },
     };
   } catch (error) {
-    await updateLineAiReplyUsage(env, target.eventKey, "error", String(error?.message || error)).catch(() => {});
-    return buildLineAiFailureDecision(events);
+    console.error(JSON.stringify({ level: "error", message: "line_keyword_menu_reply_failed", error: String(error?.message || error) }));
+    return {
+      handled: true,
+      outcome: "error",
+      replyPayload: { replyToken: target.replyToken, messages: [{ type: "text", text: "選單服務目前忙碌中，請稍後再試。" }] },
+      summary: { handled: true, outcome: "error", keyword: target.keyword, aiUsed: false },
+    };
   }
 }
 
