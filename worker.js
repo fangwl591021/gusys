@@ -64,7 +64,7 @@ export default {
       if (url.pathname === "/action-modules.html") return renderActionModulesPage(request);
       if (url.pathname === "/mylittlesys_free.html") return renderActionFlexEditorPage();
       if (url.pathname === "/api/action-admin" && request.method === "POST") return handleActionAdminCompat(request, env);
-      if (url.pathname === "/shop" || url.pathname === "/huaxu-shop.html") return renderShopPage(request, env);
+      if (url.pathname === "/shop" || url.pathname === "/shop/hygiene" || url.pathname === "/huaxu-shop.html") return renderShopPage(request, env);
       if (url.pathname === "/assets/pool-hygiene-guide.jpg" && request.method === "GET") return getPoolHygieneGuideImage(env);
       if (url.pathname === "/hub-test") return handleHubTest(env);
       if (url.pathname === "/line-webhook") return handleLineWebhook(request, env, ctx);
@@ -697,14 +697,14 @@ async function buildLinePoolHygieneFlexMessage(env) {
   const settings = await getPublicHookteaSettings(env);
   const liffId = String(settings.liff_id || env.LINE_LIFF_ID || "").trim();
   const textUrl = liffId
-    ? `https://liff.line.me/${encodeURIComponent(liffId)}?view=hygiene`
+    ? `https://liff.line.me/${encodeURIComponent(liffId)}/hygiene`
     : `${workerPublicBase(env)}/shop?view=hygiene`;
   return {
     type: "flex",
     altText: "入池衛生須知：入池前請先閱讀 9 項衛生與安全規範",
     contents: {
       type: "bubble",
-      size: "mega",
+      size: "giga",
       hero: {
         type: "image",
         url: `${workerPublicBase(env)}/assets/pool-hygiene-guide.jpg`,
@@ -5897,13 +5897,22 @@ async function renderShopPage(request, env) {
   let settings = defaultHookteaSettings(env);
   let products = [];
   let loadError = "";
+  const url = new URL(request.url);
   try {
-    [settings, products] = await Promise.all([getPublicHookteaSettings(env), listShopProductRows(env)]);
+    settings = await getPublicHookteaSettings(env);
   } catch (error) {
     loadError = String(error?.message || error);
   }
-  const url = new URL(request.url);
-  if (url.searchParams.get("view") === "hygiene") return renderPoolHygieneGuidePage(settings);
+  const liffState = String(url.searchParams.get("liff.state") || "").trim();
+  const isHygieneView = url.pathname === "/shop/hygiene"
+    || url.searchParams.get("view") === "hygiene"
+    || /^\/?hygiene(?:[/?#]|$)/i.test(liffState);
+  if (isHygieneView) return renderPoolHygieneGuidePage(settings);
+  try {
+    products = await listShopProductRows(env);
+  } catch (error) {
+    loadError = String(error?.message || error);
+  }
   const brandTitle = String(settings.shop_front_title || settings.shop_name || "HookTea 商城").trim() || "HookTea 商城";
   const heroTitle = String(settings.shop_hero_title || "喚醒 蛻變 完整").trim();
   const heroBadge = String(settings.shop_hero_badge || "").trim();
