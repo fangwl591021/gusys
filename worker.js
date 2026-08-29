@@ -100,6 +100,10 @@ export default {
       if (url.pathname === "/api/admin/ai-knowledge" && request.method === "GET") return listAdminAiKnowledge(request, env);
       if (url.pathname === "/api/admin/ai-knowledge" && request.method === "POST") return saveAdminAiKnowledge(request, env);
       if (url.pathname.startsWith("/api/admin/ai-knowledge/") && request.method === "DELETE") return deleteAdminAiKnowledge(request, env, decodeURIComponent(url.pathname.slice("/api/admin/ai-knowledge/".length)));
+      if (url.pathname.startsWith("/api/media-wall/store-videos/") && url.pathname.endsWith("/stream") && (request.method === "GET" || request.method === "HEAD")) {
+        const id = decodeURIComponent(url.pathname.slice("/api/media-wall/store-videos/".length, -"/stream".length));
+        return streamPublicMediaVideo(request, env, id);
+      }
       if (url.pathname === "/api/media-wall/store-videos" && request.method === "GET") return await listPublicMediaVideos(env);
       if (url.pathname === "/api/admin/media-videos" && request.method === "GET") return await listAdminMediaVideos(request, env);
       if (url.pathname === "/api/admin/media-videos" && request.method === "POST") return await saveAdminMediaVideo(request, env);
@@ -1920,11 +1924,59 @@ function normalizeHttpsUrl(value, field, required = false) {
   return url.href.slice(0, 3000);
 }
 
+function googleDriveFileId(value) {
+  let url;
+  try { url = new URL(String(value || "")); } catch { return ""; }
+  const host = url.hostname.toLowerCase();
+  if (host !== "drive.google.com" && host !== "drive.usercontent.google.com") return "";
+  const pathMatch = url.pathname.match(/\/file\/d\/([A-Za-z0-9_-]{20,})/);
+  const id = pathMatch?.[1] || url.searchParams.get("id") || "";
+  return /^[A-Za-z0-9_-]{20,}$/.test(id) ? id : "";
+}
+
+function publicMediaVideoPlaybackUrl(row) {
+  if (String(row?.playbackMode || "") !== "html5" || !googleDriveFileId(row?.sourceUrl)) return "";
+  return `/api/media-wall/store-videos/${encodeURIComponent(String(row.id || ""))}/stream`;
+}
+
 async function listPublicMediaVideos(env) {
   requireDb(env);
   await ensureMediaVideoSchema(env);
   const { results } = await env.DB.prepare(mediaVideoSelectSql("WHERE status = 'active'")).all();
-  return json({ ok: true, data: results || [] });
+  return json({ ok: true, data: (results || []).map(row => ({ ...row, playbackUrl: publicMediaVideoPlaybackUrl(row) })) });
+}
+
+async function streamPublicMediaVideo(request, env, id) {
+  requireDb(env);
+  await ensureMediaVideoSchema(env);
+  const videoId = String(id || "").trim();
+  if (!videoId || videoId.includes("/")) return new Response("Not found", { status: 404 });
+  const row = await env.DB.prepare(mediaVideoSelectSql("WHERE id = ? AND status = 'active' AND playback_mode = 'html5'"))
+    .bind(videoId).first();
+  const driveId = googleDriveFileId(row?.sourceUrl);
+  if (!row || !driveId) return new Response("Not found", { status: 404 });
+
+  const upstreamHeaders = new Headers();
+  const range = request.headers.get("range");
+  if (range) upstreamHeaders.set("range", range);
+  const upstream = await fetch(`https://drive.usercontent.google.com/download?id=${encodeURIComponent(driveId)}&export=download`, {
+    method: request.method === "HEAD" ? "HEAD" : "GET",
+    headers: upstreamHeaders,
+    redirect: "follow",
+  });
+  if (!upstream.ok && upstream.status !== 206) return new Response("Video source unavailable", { status: 502 });
+
+  const headers = new Headers({
+    "content-type": upstream.headers.get("content-type") || "video/mp4",
+    "accept-ranges": upstream.headers.get("accept-ranges") || "bytes",
+    "cache-control": "public, max-age=3600",
+    "x-content-type-options": "nosniff",
+  });
+  for (const name of ["content-length", "content-range", "etag", "last-modified"]) {
+    const value = upstream.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return new Response(request.method === "HEAD" ? null : upstream.body, { status: upstream.status, headers });
 }
 
 async function listAdminMediaVideos(request, env) {
