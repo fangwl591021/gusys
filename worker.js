@@ -95,8 +95,8 @@ const LINE_JIAOXI_RECOMMENDATIONS = {
   stay: {
     items: [
       { name: "礁溪沐夏民宿", phone: "0955323655", image: "https://tw-bnb.com/web/mx/img/img100/e17.jpg", imageSource: "礁溪沐夏民宿官網", imageSourceUrl: "https://tw-bnb.com/web/mx/" },
-      { name: "佧美．奧之湯 ISPAVITA", phone: "039870789", image: "https://www.ispavita.com.tw/images/about1.png", imageSource: "ISPAVITA 官網", imageSourceUrl: "https://www.ispavita.com.tw/" },
-      { name: "礁溪老爺酒店", phone: "039886288", image: "https://imagedelivery.net/a6-OYZSpZSiOriMeuFHR3w/10be9358-27f1-4b39-575f-b8a72bc88a00/public", imageSource: "礁溪老爺酒店官網", imageSourceUrl: "https://www.hotelroyal.com.tw/zh-tw/chiaohsi/about/Intro" },
+      { name: "瑪林好室 Mori House", phone: "0928554033", image: "https://q-xx.bstatic.com/xdata/images/hotel/608x352/824171502.webp?k=21ad69964f860b612dced1e7d6b8b031f4c28a73dcad79761de7c6d100884b0f&o=", imageSource: "店家住宿頁面", imageSourceUrl: "https://www.booking.com/hotel/tw/mori-housema-lin-hao-shi-shi-nei-yong-chi-villa-zhe-yang-zhe-yu-jiao-xi-zhi-gan.zh-tw.html" },
+      { name: "廸布斯民宿", phone: "0927963513" },
       { name: "枂舍 Yueshe House", phone: "0958487958", image: "https://hemusih.com/yueshe-house/public/gallery/%E5%8D%81%E4%BA%BA/img-3.jpg", imageSource: "枂舍官網", imageSourceUrl: "https://hemusih.com/yueshe-house/" },
       { name: "礁溪木BOX田妍山色", phone: "0952670940", image: "https://www.easytravel.com.tw/ehotel/hotelimg/picture/b/10089_202305311644587603_403.JPG", imageSource: "店家住宿實景", imageSourceUrl: "https://www.easytravel.com.tw/ehotel/default.aspx?n=10089" },
     ],
@@ -112,7 +112,7 @@ const LINE_JIAOXI_RECOMMENDATIONS = {
   },
   shop: {
     items: [
-      { name: "諾貝爾奶凍 礁溪店", phone: "039885919", image: "https://www.cakenobel.com.tw/images/menu_images/item01-01.png", imageSource: "諾貝爾奶凍官網", imageSourceUrl: "https://www.cakenobel.com.tw/" },
+      { name: "抹茶山伴手禮 礁溪店", phone: "039883370" },
       { name: "阿萬之家 礁溪店", phone: "039870620", image: "https://www.jiaoxi-tourism.tw/media/k2/items/cache/c9e8d9069e929f4898939a62f1adcffd_M.jpg", imageSource: "礁溪旅遊網／店家提供", imageSourceUrl: "https://www.jiaoxi-tourism.tw/index.php/zh/shopping/item/287-shop-g-12?showall=1" },
       { name: "奕順軒 礁溪店", phone: "039876336", image: "https://www.jiaoxi-tourism.tw/media/k2/items/cache/d632334130a2b9d194362b7d857b88bf_M.jpg", imageSource: "礁溪旅遊網／店家提供", imageSourceUrl: "https://www.jiaoxi-tourism.tw/index.php/zh/all-in-one-map/item/284-shop-g-9" },
       { name: "礁溪三源行", phone: "039883329", image: "https://www.samguan.com.tw/archive/image/header_info/FB200116-layout_thumb_1851_913.jpg", imageSource: "三源行官網", imageSourceUrl: "https://www.samguan.com.tw/" },
