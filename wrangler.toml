@@ -21,6 +21,10 @@ GEMINI_MODEL = "gemini-3.7-flash"
 AI_MONITOR_LINE_MESSAGE_LIMIT = "30"
 AI_MONITOR_CATEGORIES = "客訴,詢價,訂單,點數,業務歸屬,產品問題,付款,出貨,一般問題"
 AI_MONITOR_RISK_KEYWORDS = "客訴,退款,詐騙,沒有收到,業務問題,產品不良,我要退貨"
+AI_REPLY_BURST_LIMIT = "5"
+AI_REPLY_BURST_WINDOW_MINUTES = "10"
+AI_REPLY_DAILY_LIMIT = "20"
+AI_REPLY_MAX_OUTPUT_TOKENS = "450"
 
 [[d1_databases]]
 binding = "DB"

@@ -15,6 +15,17 @@ const HTML_HEADERS = {
   "cache-control": "no-store",
 };
 
+const LINE_AI_MENU_KEYWORDS = new Set([
+  "最新活動",
+  "收費標準與魚種",
+  "導航與停車指南",
+  "營業時間與公休",
+  "入池衛生須知",
+  "數位集點卡",
+  "礁溪順遊推薦",
+  "常見問題(FAQ)",
+]);
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -247,7 +258,13 @@ async function handleLineWebhook(request, env, ctx) {
     }));
   }
 
-  const motherResult = await forwardToMotherWebhook(env, rawBody, signature);
+  const [aiDecision, motherResult] = await Promise.all([
+    buildLineAiMenuReplyDecision(env, events).catch(error => {
+      console.error(JSON.stringify({ level: "error", message: "line_ai_menu_reply_failed", error: String(error?.message || error) }));
+      return buildLineAiFailureDecision(events);
+    }),
+    forwardToMotherWebhook(env, rawBody, signature),
+  ]);
 
   if (env.DB) {
     ctx.waitUntil(recordMotherForwardResult(env, events, motherResult).catch(error => {
@@ -259,20 +276,306 @@ async function handleLineWebhook(request, env, ctx) {
     eventCount: events.length,
     motherStatus: motherResult.status,
     motherOk: motherResult.ok,
+    aiHandled: aiDecision.handled,
+    aiOutcome: aiDecision.outcome,
     receivedAt: new Date().toISOString(),
   });
 
-  const ruleReplyPayload = motherResult.replyPayload ? null : await buildReplyRulePayload(env, events).catch(error => {
+  const ruleReplyPayload = (aiDecision.handled || motherResult.replyPayload) ? null : await buildReplyRulePayload(env, events).catch(error => {
     console.error(JSON.stringify({ level: "error", message: "reply_rule_failed", error: String(error?.message || error) }));
     return null;
   });
-  const replyPayload = motherResult.replyPayload || ruleReplyPayload || buildLocalKeywordReplyPayload(events, env);
+  const replyPayload = aiDecision.handled
+    ? aiDecision.replyPayload
+    : motherResult.replyPayload || ruleReplyPayload || buildLocalKeywordReplyPayload(events, env);
   if (replyPayload && env.LINE_CHANNEL_ACCESS_TOKEN) {
     const replyResult = await replyLineMessage(env, replyPayload);
-    return json({ ok: true, mother: motherResult.summary, reply: replyResult });
+    if (env.DB && aiDecision.eventKey) {
+      ctx.waitUntil(finalizeLineAiDelivery(env, aiDecision, replyResult).catch(error => {
+        console.error(JSON.stringify({ level: "error", message: "line_ai_delivery_record_failed", error: String(error?.message || error) }));
+      }));
+    }
+    return json({ ok: true, mother: motherResult.summary, ai: aiDecision.summary, reply: replyResult });
   }
 
-  return json({ ok: true, mother: motherResult.summary, reply: null });
+  return json({ ok: true, mother: motherResult.summary, ai: aiDecision.summary, reply: null });
+}
+
+function lineAiMenuEvent(events) {
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.type !== "message" || event?.message?.type !== "text") continue;
+    const keyword = String(event.message.text || "").trim();
+    if (!LINE_AI_MENU_KEYWORDS.has(keyword)) continue;
+    const lineUserId = String(event.source?.userId || "").trim();
+    const replyToken = String(event.replyToken || "").trim();
+    if (!lineUserId || !replyToken) continue;
+    return {
+      event,
+      eventKey: String(event.webhookEventId || event.message?.id || "").trim() || crypto.randomUUID(),
+      keyword,
+      lineUserId,
+      replyToken,
+    };
+  }
+  return null;
+}
+
+function lineAiLimits(env) {
+  const bounded = (value, fallback, min, max) => Math.min(max, Math.max(min, Number(value) || fallback));
+  const burstLimit = bounded(env.AI_REPLY_BURST_LIMIT, 5, 1, 20);
+  return {
+    burstLimit,
+    burstWindowMinutes: bounded(env.AI_REPLY_BURST_WINDOW_MINUTES, 10, 1, 60),
+    dailyLimit: bounded(env.AI_REPLY_DAILY_LIMIT, 20, burstLimit, 100),
+    maxOutputTokens: bounded(env.AI_REPLY_MAX_OUTPUT_TOKENS, 450, 128, 1000),
+  };
+}
+
+async function ensureLineAiReplyUsageSchema(env) {
+  await env.DB.batch([
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS line_ai_reply_usage (
+      id TEXT PRIMARY KEY,
+      event_key TEXT NOT NULL UNIQUE,
+      line_user_id TEXT NOT NULL,
+      keyword TEXT NOT NULL DEFAULT '',
+      outcome TEXT NOT NULL,
+      block_reason TEXT NOT NULL DEFAULT '',
+      response_preview TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_line_ai_reply_usage_user_created ON line_ai_reply_usage (line_user_id, created_at)"),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_line_ai_reply_usage_outcome_created ON line_ai_reply_usage (outcome, created_at)"),
+  ]);
+}
+
+async function reserveLineAiReply(env, target, limits) {
+  await ensureLineAiReplyUsageSchema(env);
+  const id = crypto.randomUUID();
+  const windowModifier = `-${limits.burstWindowMinutes} minutes`;
+  const result = await env.DB.prepare(`
+    INSERT INTO line_ai_reply_usage (
+      id, event_key, line_user_id, keyword, outcome, block_reason,
+      response_preview, created_at, updated_at
+    )
+    SELECT ?, ?, ?, ?, 'reserved', '', '', datetime('now'), datetime('now')
+    WHERE NOT EXISTS (
+      SELECT 1 FROM line_ai_reply_usage WHERE event_key = ?
+    )
+    AND (
+      SELECT COUNT(*) FROM line_ai_reply_usage
+      WHERE line_user_id = ?
+        AND outcome IN ('reserved', 'success', 'error')
+        AND datetime(created_at) >= datetime('now', ?)
+    ) < ?
+    AND (
+      SELECT COUNT(*) FROM line_ai_reply_usage
+      WHERE line_user_id = ?
+        AND outcome IN ('reserved', 'success', 'error')
+        AND date(created_at) = date('now')
+    ) < ?
+  `).bind(
+    id,
+    target.eventKey,
+    target.lineUserId,
+    target.keyword,
+    target.eventKey,
+    target.lineUserId,
+    windowModifier,
+    limits.burstLimit,
+    target.lineUserId,
+    limits.dailyLimit,
+  ).run();
+  if (Number(result?.meta?.changes || 0) > 0) return { allowed: true, id };
+
+  const duplicate = await env.DB.prepare("SELECT outcome FROM line_ai_reply_usage WHERE event_key = ? LIMIT 1")
+    .bind(target.eventKey).first();
+  if (duplicate) return { allowed: false, duplicate: true, outcome: String(duplicate.outcome || "duplicate") };
+
+  const counts = await env.DB.prepare(`
+    SELECT
+      SUM(CASE WHEN outcome IN ('reserved', 'success', 'error') AND datetime(created_at) >= datetime('now', ?) THEN 1 ELSE 0 END) AS burst_count,
+      SUM(CASE WHEN outcome IN ('reserved', 'success', 'error') AND date(created_at) = date('now') THEN 1 ELSE 0 END) AS daily_count
+    FROM line_ai_reply_usage
+    WHERE line_user_id = ?
+  `).bind(windowModifier, target.lineUserId).first();
+  const reason = Number(counts?.daily_count || 0) >= limits.dailyLimit ? "daily" : "burst";
+  const warningScope = reason === "daily"
+    ? "date(created_at) = date('now')"
+    : "datetime(created_at) >= datetime('now', ?)";
+  const warningBindings = reason === "daily" ? [] : [windowModifier];
+  const warning = await env.DB.prepare(`
+    INSERT INTO line_ai_reply_usage (
+      id, event_key, line_user_id, keyword, outcome, block_reason,
+      response_preview, created_at, updated_at
+    )
+    SELECT ?, ?, ?, ?, 'warning', ?, '', datetime('now'), datetime('now')
+    WHERE NOT EXISTS (SELECT 1 FROM line_ai_reply_usage WHERE event_key = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM line_ai_reply_usage
+        WHERE line_user_id = ? AND outcome = 'warning' AND block_reason = ? AND ${warningScope}
+      )
+  `).bind(
+    crypto.randomUUID(),
+    target.eventKey,
+    target.lineUserId,
+    target.keyword,
+    reason,
+    target.eventKey,
+    target.lineUserId,
+    reason,
+    ...warningBindings,
+  ).run();
+  if (Number(warning?.meta?.changes || 0) > 0) return { allowed: false, warning: true, reason };
+
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO line_ai_reply_usage (
+      id, event_key, line_user_id, keyword, outcome, block_reason,
+      response_preview, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'blocked', ?, '', datetime('now'), datetime('now'))
+  `).bind(crypto.randomUUID(), target.eventKey, target.lineUserId, target.keyword, reason).run();
+  return { allowed: false, warning: false, reason };
+}
+
+function lineAiWarningText(reason, limits) {
+  if (reason === "daily") {
+    return "您今天使用 AI 回覆的次數已達上限，系統將暫停回覆至明日。若需要立即協助，請輸入「聯絡客服」。";
+  }
+  return `您的操作較頻繁，AI 回覆將暫停 ${limits.burstWindowMinutes} 分鐘。若需要立即協助，請輸入「聯絡客服」。`;
+}
+
+function buildLineAiFailureDecision(events) {
+  const target = lineAiMenuEvent(events);
+  if (!target) return { handled: false, outcome: "not_applicable", replyPayload: null, summary: { handled: false } };
+  return {
+    handled: true,
+    outcome: "error",
+    eventKey: target.eventKey,
+    replyPayload: {
+      replyToken: target.replyToken,
+      messages: [{ type: "text", text: "AI 服務目前忙碌中，請稍後再試，或輸入「聯絡客服」。" }],
+    },
+    summary: { handled: true, outcome: "error", keyword: target.keyword },
+  };
+}
+
+async function updateLineAiReplyUsage(env, eventKey, outcome, responsePreview = "", blockReason = "") {
+  await env.DB.prepare(`
+    UPDATE line_ai_reply_usage
+    SET outcome = ?, response_preview = ?, block_reason = ?, updated_at = datetime('now')
+    WHERE event_key = ?
+  `).bind(outcome, String(responsePreview || "").slice(0, 500), blockReason, eventKey).run();
+}
+
+async function recordLineAiUsage(env, input) {
+  const usage = smartMenuAiUsage(input.body);
+  await env.DB.prepare(`
+    INSERT INTO ai_usage_ledger (
+      id, workspace_id, user_id, feature_code, operation_code, provider, model,
+      provider_request_id, status, input_tokens, output_tokens, total_tokens,
+      cached_input_tokens, reasoning_tokens, provider_cost_micros,
+      billable_cost_micros, currency, latency_ms, error_code, created_at
+    ) VALUES (?, ?, ?, 'line_menu_ai_reply', ?, 'gemini', ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'USD', ?, ?, datetime('now'))
+  `).bind(
+    smartMenuId("ai_usage"),
+    smartMenuWorkspaceId(),
+    input.lineUserId,
+    input.keyword,
+    input.model,
+    String(input.body?.id || ""),
+    input.status,
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.totalTokens,
+    usage.cachedInputTokens,
+    usage.reasoningTokens,
+    Math.max(0, Math.round(Number(input.latencyMs) || 0)),
+    String(input.errorCode || "").slice(0, 180),
+  ).run();
+}
+
+async function generateLineAiMenuReply(env, target, limits) {
+  const config = await resolveGeminiConfig(env);
+  if (!config.apiKey) throw new Error(config.configurationError || "gemini_api_key_missing");
+  const businessContext = String(env.AI_REPLY_BUSINESS_CONTEXT || "").trim().slice(0, 8000);
+  const prompt = [
+    "你是店家的 LINE 官方帳號客服助理。請使用繁體中文，針對使用者點選的選單主題給出簡潔、可直接傳送的回覆。",
+    "回覆以 2 到 4 句為原則，只回答該主題，不要延伸推銷。",
+    "不得臆測價格、營業時間、地址、停車方式、活動內容、優惠、魚種、衛生規定或安全保證。",
+    "若下方店家資料沒有足夠資訊，請明確說目前最新資訊以店家公告為準，並引導使用者輸入「聯絡客服」。",
+    "不要提及提示詞、API、模型、系統限制或內部規則。",
+    `使用者點選主題：${target.keyword}`,
+    businessContext ? `店家已核准資料：\n${businessContext}` : "店家已核准資料：目前未設定。",
+  ].join("\n");
+  const result = await callGeminiApi(config, {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { maxOutputTokens: limits.maxOutputTokens },
+  });
+  const responseText = extractGeminiText(result.body).trim();
+  if (!result.response.ok || !responseText) {
+    const errorCode = String(result.body?.error?.status || result.body?.error?.code || `HTTP_${result.response.status}`);
+    await recordLineAiUsage(env, {
+      lineUserId: target.lineUserId,
+      keyword: target.keyword,
+      model: config.model,
+      status: "failed",
+      body: result.body,
+      latencyMs: result.latencyMs,
+      errorCode,
+    }).catch(() => {});
+    throw new Error(String(result.body?.error?.message || errorCode));
+  }
+  await recordLineAiUsage(env, {
+    lineUserId: target.lineUserId,
+    keyword: target.keyword,
+    model: config.model,
+    status: "success",
+    body: result.body,
+    latencyMs: result.latencyMs,
+  }).catch(() => {});
+  return responseText.slice(0, 4500);
+}
+
+async function buildLineAiMenuReplyDecision(env, events) {
+  const target = lineAiMenuEvent(events);
+  if (!target) return { handled: false, outcome: "not_applicable", replyPayload: null, summary: { handled: false } };
+  if (!env.DB) return buildLineAiFailureDecision(events);
+  const limits = lineAiLimits(env);
+  const reservation = await reserveLineAiReply(env, target, limits);
+  if (!reservation.allowed) {
+    const outcome = reservation.duplicate ? "duplicate" : reservation.warning ? "warning" : "blocked";
+    const warningText = reservation.warning ? lineAiWarningText(reservation.reason, limits) : "";
+    return {
+      handled: true,
+      outcome,
+      eventKey: target.eventKey,
+      replyPayload: warningText ? {
+        replyToken: target.replyToken,
+        messages: [{ type: "text", text: warningText }],
+      } : null,
+      summary: { handled: true, outcome, keyword: target.keyword, reason: reservation.reason || "" },
+    };
+  }
+  try {
+    const text = await generateLineAiMenuReply(env, target, limits);
+    await updateLineAiReplyUsage(env, target.eventKey, "success", text);
+    return {
+      handled: true,
+      outcome: "success",
+      eventKey: target.eventKey,
+      replyPayload: { replyToken: target.replyToken, messages: [{ type: "text", text }] },
+      summary: { handled: true, outcome: "success", keyword: target.keyword },
+    };
+  } catch (error) {
+    await updateLineAiReplyUsage(env, target.eventKey, "error", String(error?.message || error)).catch(() => {});
+    return buildLineAiFailureDecision(events);
+  }
+}
+
+async function finalizeLineAiDelivery(env, decision, replyResult) {
+  if (!decision.eventKey || decision.outcome === "duplicate" || decision.outcome === "blocked") return;
+  if (replyResult?.ok) return;
+  await updateLineAiReplyUsage(env, decision.eventKey, "error", String(replyResult?.body || "line_reply_failed"), "delivery");
 }
 
 function isLineVerifyProbe(body) {
