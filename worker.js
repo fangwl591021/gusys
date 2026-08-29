@@ -223,8 +223,37 @@ function buildMemberShareLiffUrl(liffId, shareCode) {
   const id = String(liffId || "").trim();
   const code = normalizeMemberShareCode(shareCode);
   if (!id || !code) return "";
-  const params = new URLSearchParams({ ref: code, source: "line_invite" });
+  const params = new URLSearchParams({
+    view: "referral",
+    ref: code,
+    point_friend: "1",
+    point_from: "lineoa-referral-keyword-v2",
+    from: "gusys",
+  });
   return `https://liff.line.me/${encodeURIComponent(id)}?${params.toString()}`;
+}
+
+async function resolveLineOaIdentity(env, settings = {}) {
+  const configuredUrl = String(settings.link_lineoa || env.LINE_OA_ADD_FRIEND_URL || "").trim();
+  let displayName = String(env.LINE_OA_NAME || "宜蘭礁溪重口味溫泉魚").trim();
+  if (configuredUrl) return { displayName, addFriendUrl: configuredUrl };
+  const token = String(env.LINE_CHANNEL_ACCESS_TOKEN || "").trim();
+  if (!token) return { displayName, addFriendUrl: "" };
+  try {
+    const response = await fetch("https://api.line.me/v2/bot/info", {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) return { displayName, addFriendUrl: "" };
+    const profile = await response.json();
+    displayName = String(profile.displayName || displayName).trim() || displayName;
+    const basicId = String(profile.basicId || "").trim();
+    return {
+      displayName,
+      addFriendUrl: basicId ? `https://line.me/R/ti/p/${encodeURIComponent(basicId)}` : "",
+    };
+  } catch (_) {
+    return { displayName, addFriendUrl: "" };
+  }
 }
 
 function memberShareCodeFromShopUrl(url) {
@@ -6202,6 +6231,53 @@ function renderPoolHygieneGuidePage(settings) {
 </html>`, { headers: HTML_HEADERS });
 }
 
+async function renderMemberReferralPage(env, settings, shareCode) {
+  const liffId = String(settings.liff_id || env.LINE_LIFF_ID || "").trim();
+  const oa = await resolveLineOaIdentity(env, settings);
+  const addFriendUrl = String(oa.addFriendUrl || "").trim();
+  return new Response(`<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>加入宜蘭礁溪重口味溫泉魚</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f4f7f5;color:#17211b;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}
+    main{width:min(100%,430px);background:#fff;border:1px solid #dfe9e2;border-radius:8px;padding:30px 24px;box-shadow:0 14px 36px rgba(25,62,42,.10);text-align:center}
+    .mark{width:76px;height:76px;margin:0 auto 20px;border-radius:50%;display:grid;place-items:center;background:#e9fbee;color:#06c755;font-size:36px;font-weight:900}
+    h1{font-size:25px;line-height:1.35;margin:0 0 10px;letter-spacing:0}.lead{margin:0;color:#607067;font-size:15px;line-height:1.7;font-weight:700}.status{margin:22px 0 0;padding:14px;border-radius:8px;background:#f0f8f2;color:#25613d;font-weight:850;line-height:1.6}
+    .actions{display:grid;gap:10px;margin-top:20px}.btn{display:flex;align-items:center;justify-content:center;width:100%;min-height:52px;border:0;border-radius:8px;padding:13px 16px;text-decoration:none;font-size:17px;font-weight:900}.primary{background:#06c755;color:#fff}.secondary{background:#f2f5f3;color:#405248}.btn[hidden]{display:none}.error{background:#fff1f2;color:#be123c}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark">LINE</div>
+    <h1>加入宜蘭礁溪重口味溫泉魚</h1>
+    <p class="lead">請先加入 LINE 官方帳號，系統才可完成好友推薦歸屬與後續通知。</p>
+    <div class="status" id="status">正在確認 LINE 好友狀態...</div>
+    <div class="actions">
+      <a class="btn primary" id="addFriend" href=${JSON.stringify(addFriendUrl)} hidden>點此加入官方帳號</a>
+      <button class="btn secondary" id="retry" type="button" hidden>我已加入，繼續</button>
+    </div>
+  </main>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    const LIFF_ID=${JSON.stringify(liffId)};
+    const SHARE_CODE=${JSON.stringify(shareCode)};
+    const ADD_FRIEND_URL=${JSON.stringify(addFriendUrl)};
+    const statusEl=document.getElementById("status");
+    const addFriend=document.getElementById("addFriend");
+    const retry=document.getElementById("retry");
+    function showAddFriend(message){statusEl.textContent=message||"尚未加入官方帳號";addFriend.hidden=!ADD_FRIEND_URL;retry.hidden=false;if(!ADD_FRIEND_URL){statusEl.classList.add("error");statusEl.textContent="官方帳號加好友網址尚未設定，請聯絡管理員。"}}
+    async function bindReferral(profile){const response=await fetch("/api/referrals/bind",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({share:SHARE_CODE,lineUserId:profile.userId,displayName:profile.displayName||"",pictureUrl:profile.pictureUrl||"",source:"referral_liff"})});const body=await response.json();if(!response.ok||body.ok===false)throw new Error(body.message||body.error||("HTTP "+response.status));statusEl.textContent="已加入官方帳號，推薦歸屬完成。";addFriend.hidden=true;retry.hidden=true;}
+    async function start(){statusEl.classList.remove("error");statusEl.textContent="正在確認 LINE 好友狀態...";retry.hidden=true;try{if(!LIFF_ID||!window.liff)throw new Error("LIFF 尚未設定");await liff.init({liffId:LIFF_ID});if(!liff.isLoggedIn()){liff.login({redirectUri:location.href.split("#")[0]});return}const profile=await liff.getProfile();let friendship=null;try{friendship=await liff.getFriendship()}catch(error){console.warn("friendship check failed",error)}if(!friendship||!friendship.friendFlag){showAddFriend("還差最後一步，請先加入 LINE 官方帳號。");return}await bindReferral(profile)}catch(error){console.error(error);statusEl.classList.add("error");statusEl.textContent="處理失敗："+(error.message||error);retry.hidden=false}}
+    retry.onclick=start;
+    start();
+  </script>
+</body>
+</html>`, { headers: HTML_HEADERS });
+}
+
 async function renderShopPage(request, env) {
   let settings = defaultHookteaSettings(env);
   let products = [];
@@ -6217,6 +6293,7 @@ async function renderShopPage(request, env) {
   if (memberShareCode) {
     const share = await recordMemberShareOpen(env, memberShareCode, "shop_liff_open").catch(() => null);
     if (!share) memberShareCode = "";
+    else return renderMemberReferralPage(env, settings, memberShareCode);
   }
   const isHygieneView = url.pathname === "/shop/hygiene"
     || url.searchParams.get("view") === "hygiene"
@@ -6232,7 +6309,7 @@ async function renderShopPage(request, env) {
   const heroBadge = String(settings.shop_hero_badge || "").trim();
   const heroSubtitle = String(settings.shop_hero_subtitle || "讓生活有光，讓選擇有路").trim();
   const heroImage = String(settings.shop_banner_image || settings.banner_image || products.find(p => p.image)?.image || "").trim();
-  const data = JSON.stringify({ settings, products, loadError, brandTitle, heroTitle, heroBadge, heroSubtitle, heroImage, memberShareCode }).replace(/</g, "\\u003c");
+  const data = JSON.stringify({ settings, products, loadError, brandTitle, heroTitle, heroBadge, heroSubtitle, heroImage }).replace(/</g, "\\u003c");
   return new Response(`<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -6319,10 +6396,9 @@ async function renderShopPage(request, env) {
     function memberAddressValue(){return String(memberProfile?.address||"").trim()}
     function isMemberRegistered(){return !!(memberProfile&&memberNameValue()&&memberPhoneValue())}
     function applySameAsMember(){if(!$('sameAsMember')?.checked)return;if(!isMemberRegistered()){showToast('請先完成註冊資料');openProfileForm();return}$('shippingName').value=memberNameValue();$('shippingPhone').value=memberPhoneValue();$('shippingAddress').value=memberAddressValue();}
-    async function initLiff(){try{updateMemberPanel(null);if(!settings.liff_id||!window.liff){showToast("尚未設定 LIFF ID");return}await liff.init({liffId:settings.liff_id});if(!liff.isLoggedIn()){showToast("正在進行 LINE 登入");liff.login({redirectUri:location.href.split("#")[0]});return}const profile=await liff.getProfile();$("lineUserId").value=profile.userId||"";await syncMemberProfile(profile);await bindReferralFromShare(profile);}catch(e){console.warn(e);showToast("LINE 登入失敗："+(e.message||e))}}
+    async function initLiff(){try{updateMemberPanel(null);if(!settings.liff_id||!window.liff){showToast("尚未設定 LIFF ID");return}await liff.init({liffId:settings.liff_id});if(!liff.isLoggedIn()){showToast("正在進行 LINE 登入");liff.login({redirectUri:location.href.split("#")[0]});return}const profile=await liff.getProfile();$("lineUserId").value=profile.userId||"";await syncMemberProfile(profile);}catch(e){console.warn(e);showToast("LINE 登入失敗："+(e.message||e))}}
     function updateMemberPanel(profile){const name=profile?.displayName||profile?.name||"尚未登入";const uid=profile?.lineUserId||profile?.userId||"請用 LINE LIFF 開啟以取得身分";const pic=profile?.pictureUrl||"";const registered=!!(profile&&String(profile.displayName||"").trim()&&String(profile.phone||"").trim());$("memberPanelName").textContent=name;$("memberPanelUid").textContent=uid;$("memberPanelStatus").textContent=registered?"完成註冊":"未完成，點我註冊";$("memberStatusChip").classList.toggle("warn",!registered);$("memberPanelPhoto").innerHTML=pic?'<img src="'+esc(pic)+'" alt="">':(name||"U").slice(0,1);$("lineAvatar").innerHTML=pic?'<img src="'+esc(pic)+'" alt="">':(name||"U").slice(0,1);applySameAsMember();}
     async function syncMemberProfile(profile){memberProfile={lineUserId:profile.userId,displayName:profile.displayName,pictureUrl:profile.pictureUrl||"",phone:profile.phone||"",address:profile.address||""};updateMemberPanel(memberProfile);try{const res=await fetch('/api/shop/member',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(Object.assign({},memberProfile,{profileOnly:true}))});const body=await res.json();if(res.ok&&body.ok&&body.data){memberProfile=Object.assign({},memberProfile,body.data);updateMemberPanel(memberProfile)}await loadMemberPoints(memberProfile.lineUserId);}catch(e){console.warn(e);showToast("會員資料同步失敗")}}
-    async function bindReferralFromShare(profile){const share=String(initial.memberShareCode||"").trim();const uid=String(profile?.userId||"").trim();if(!share||!uid)return;const storageKey="gusys-referral:"+share+":"+uid;if(sessionStorage.getItem(storageKey)==="done")return;try{const res=await fetch('/api/referrals/bind',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({share,lineUserId:uid,displayName:profile.displayName||"",pictureUrl:profile.pictureUrl||"",source:'shop_liff'})});const body=await res.json();if(!res.ok||body.ok===false)throw new Error(body.message||body.error||('HTTP '+res.status));sessionStorage.setItem(storageKey,"done");const result=String(body.data?.attribution||"");if(result==="bound"||result==="already_bound_to_owner")showToast("推薦歸屬已完成");}catch(e){console.warn("推薦歸屬失敗",e);showToast("推薦歸屬暫時無法完成")}}
     async function loadMemberPoints(lineUserId){if(!lineUserId)return;$("memberPanelPoints").textContent="讀取中";try{const res=await fetch('/api/points/list?pointType=all&lineUserId='+encodeURIComponent(lineUserId));const data=await res.json();const nested=data?.data?.data?.data||data?.data?.data||data?.data||{};const logs=Array.isArray(data.logs)?data.logs:(Array.isArray(nested.list)?nested.list:(Array.isArray(data.items)?data.items:[]));const total=logs.length?logs.reduce((sum,log)=>sum+(Number(log.get_point||log.points||log.amount||log.point||0)||0),0):Number(data.balance||0)||0;memberPointBalance=total;$("memberPanelPoints").textContent=total.toLocaleString("zh-TW");renderCart();}catch(e){memberPointBalance=0;$("memberPanelPoints").textContent="讀取失敗";renderCart();}}
     function openProfileForm(){if(!memberProfile){showToast('請先用 LINE 登入');return}$("registerName").value=memberNameValue();$("registerPhone").value=memberPhoneValue();$("registerAddress").value=memberAddressValue();$("profileStatus").textContent="";$("profileStatus").className="status";$("profileModal").classList.add("open")}
     function closeProfileForm(){$("profileModal").classList.remove("open")}
