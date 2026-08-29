@@ -29,6 +29,16 @@
     .section-title h2{margin:0;font-size:21px;line-height:1.25;letter-spacing:0}
     .section-title span{color:var(--muted);font-size:12px;white-space:nowrap}
     .grid{display:grid;gap:14px}
+    .store-section{margin-top:22px;padding:18px;border:1px solid #bfdccf;border-top:4px solid var(--accent);border-radius:8px;background:#edf8f3}
+    .store-section .section-title{margin:0 0 14px;align-items:start}
+    .store-heading{display:grid;gap:5px}
+    .store-heading h2{font-size:21px}
+    .store-heading p{margin:0;color:var(--muted);font-size:13px;line-height:1.5}
+    .store-card{border-color:#bfdccf;box-shadow:none}
+    .store-preview{display:grid;min-height:180px;place-items:center;padding:22px;background:var(--dark);color:#fff;text-align:center}
+    .store-preview-icon{display:grid;width:58px;height:58px;margin:0 auto 12px;place-items:center;border-radius:50%;background:var(--accent);font-size:24px}
+    .store-preview strong{display:block;font-size:17px;line-height:1.4}
+    .store-preview span{display:block;margin-top:6px;color:#c7d1cd;font-size:12px;line-height:1.5}
     .card{overflow:hidden;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 22px rgba(31,52,44,.06)}
     .card.featured{border-top:4px solid var(--accent)}
     .card-body{padding:16px}
@@ -71,11 +81,20 @@
     <section class="content">
       <nav class="filters" aria-label="媒體分類">
         <button class="filter active" type="button" data-filter="all" aria-pressed="true">全部</button>
+        <button class="filter" type="button" data-filter="store" aria-pressed="false">店家影音</button>
         <button class="filter" type="button" data-filter="news" aria-pressed="false">新聞／節目</button>
         <button class="filter" type="button" data-filter="youtube" aria-pressed="false">YouTube</button>
         <button class="filter" type="button" data-filter="travel" aria-pressed="false">旅遊媒體</button>
         <button class="filter" type="button" data-filter="overseas" aria-pressed="false">海外媒體</button>
       </nav>
+
+      <section class="store-section" id="storeSection">
+        <div class="section-title">
+          <div class="store-heading"><h2>🎬 店家影音專區</h2><p>由店家提供的現場影音</p></div>
+          <span id="storeVideoCount"></span>
+        </div>
+        <div class="grid" id="storeVideoGrid"></div>
+      </section>
 
       <div class="section-title"><h2>影音精選</h2><span id="videoCount"></span></div>
       <div class="grid two" id="videoGrid"></div>
@@ -91,6 +110,15 @@
 
   <script>
     const LIFF_ID="2010583609-wHgSLAEF";
+    const STORE_VIDEOS=[
+      {
+        id:"store-live-001",type:"store-video",categories:["store"],media:"官方影音",
+        title:"重口味現場直擊",
+        description:"來看看重口味溫泉魚現場的真實互動體驗！",
+        sourceUrl:"https://lisa-content.line-apps.com/eyJjb250ZW5jRW5jIjp0cnVlLCJjb250ZW50VXJpIjoiN2lndGdhaTVHQjJueXdLa3l6Wnh2cFo0ODlwcWlnVHg5eWwrWmpacXBJVFVOcEdTbk9XL2hwQkxVNEgxYlNnbkIyb25NaTd2b3ROV1dMcDl4TUhIaDFUb2N0ZENBMjQ2cllyTWJXTUErMnQ4WmZ0Q2FQSGRjUDhTYzdxQmRVMTY0c1BpTEVQeEdMalo2NitUUW1nc0x5VHJCOFU3V3U1MWdHK1h3TWxTRi9DQTJCWHE2VWNkTkxGWFp2SXFCeE1qIiwiaXNzIjoiTElTQSIsImlhdCI6MTc4ODAxMDE3MiwiYXVkIjoibGlnaHRzIn0.qt-vxu0FtKkToYp9nJr1a9_USyvV1-EYBznizej7g-M",
+        sourceLabel:"開啟店家影音",directPlayable:false
+      }
+    ];
     const MEDIA_ITEMS=[
       {
         id:"ftv-20230828",type:"video",categories:["news","youtube"],media:"民視新聞",date:"2023-08-28",
@@ -143,6 +171,8 @@
     ];
 
     const state={filter:"all",liffReady:false};
+    const storeSection=document.getElementById("storeSection");
+    const storeVideoGrid=document.getElementById("storeVideoGrid");
     const videoGrid=document.getElementById("videoGrid");
     const articleGrid=document.getElementById("articleGrid");
     const emptyState=document.getElementById("emptyState");
@@ -178,21 +208,34 @@
       return '<article class="card card-body article media-item" data-id="'+escapeHtml(item.id)+'"><div class="logo" aria-hidden="true">'+escapeHtml(item.logo||"MEDIA")+'</div><div><div class="meta">'+meta+'</div><div class="title">'+escapeHtml(item.title)+'</div><p class="desc">'+escapeHtml(item.description)+'</p></div><div class="article-actions">'+actionMarkup(item,false)+'</div></article>';
     }
 
+    function storeVideoMarkup(item){
+      const url=validExternalUrl(item.sourceUrl);
+      const action=url?'<a class="btn external primary" href="'+escapeHtml(url)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(item.sourceLabel||"開啟店家影音")+'</a>':'<span class="btn disabled" aria-disabled="true">影片目前暫時無法播放</span>';
+      return '<article class="card store-card media-item" data-id="'+escapeHtml(item.id)+'">'+
+        '<div class="store-preview"><div><span class="store-preview-icon" aria-hidden="true">▶</span><strong>店家現場影音</strong><span>此來源需於外部視窗開啟</span></div></div>'+
+        '<div class="card-body"><div class="meta"><span class="badge">'+escapeHtml(item.media||"官方影音")+'</span><span>店家自有內容</span></div><div class="title">'+escapeHtml(item.title)+'</div><p class="desc">'+escapeHtml(item.description)+'</p><div class="actions">'+action+'</div></div></article>';
+    }
+
     function visibleItems(){return MEDIA_ITEMS.filter(item=>state.filter==="all"||item.categories.includes(state.filter))}
+    function visibleStoreVideos(){return STORE_VIDEOS.filter(item=>state.filter==="all"||item.categories.includes(state.filter))}
 
     function render(){
+      const storeVideos=visibleStoreVideos();
       const visible=visibleItems();
       const videos=visible.filter(item=>item.type==="video");
       const articles=visible.filter(item=>item.type==="article");
+      storeVideoGrid.innerHTML=storeVideos.map(storeVideoMarkup).join("");
       videoGrid.innerHTML=videos.map(videoMarkup).join("");
       articleGrid.innerHTML=articles.map(articleMarkup).join("");
+      document.getElementById("storeVideoCount").textContent=storeVideos.length?storeVideos.length+" 則":"";
       document.getElementById("videoCount").textContent=videos.length?videos.length+" 則":"";
       document.getElementById("articleCount").textContent=articles.length?articles.length+" 則":"";
+      storeSection.classList.toggle("hidden",storeVideos.length===0);
       videoGrid.previousElementSibling.classList.toggle("hidden",videos.length===0);
       videoGrid.classList.toggle("hidden",videos.length===0);
       articleGrid.previousElementSibling.classList.toggle("hidden",articles.length===0);
       articleGrid.classList.toggle("hidden",articles.length===0);
-      emptyState.classList.toggle("hidden",visible.length!==0);
+      emptyState.classList.toggle("hidden",storeVideos.length+visible.length!==0);
     }
 
     function loadVideo(container){
