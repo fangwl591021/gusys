@@ -7,6 +7,9 @@ compatibility_flags = ["nodejs_compat"]
 enabled = true
 head_sampling_rate = 1
 
+[assets]
+directory = "./public"
+
 [vars]
 MOTHER_WEBHOOK_URL = "https://aiwe.cc/index.php/line_login/10279/"
 MOTHER_WEBHOOK_MODE = "raw"
