@@ -5627,6 +5627,7 @@ async function handleSmartMenuProjectRoute(request, env, url) {
   if (request.method === "PATCH" && !action) return updateSmartMenuProject(request, env, projectId);
   if (request.method === "DELETE" && !action) return deleteSmartMenuProject(request, env, projectId);
   if (request.method === "POST" && action === "upload-image") return uploadSmartMenuProjectImage(request, env, projectId);
+  if (request.method === "POST" && action === "sync-template-coordinates") return syncSmartMenuProjectTemplateCoordinates(request, env, projectId);
   if (request.method === "POST" && action === "publish") return publishSmartMenuProject(request, env, projectId);
   if (request.method === "POST" && action === "set-default") return setDefaultSmartMenuProject(request, env, projectId);
   if (request.method === "POST" && action === "disable") return disableSmartMenuProject(request, env, projectId);
@@ -5729,8 +5730,58 @@ async function uploadSmartMenuProjectImage(request, env, projectId) {
     SET asset_id = ?, status = CASE WHEN status = 'published' THEN 'draft' ELSE status END, updated_at = datetime('now')
     WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL
   `).bind(assetId, projectId, workspaceId).run();
+  let templateSync = { synced: false, areaCount: 0, templateId: existing.templateId || "" };
+  if (payload.syncTemplateCoordinates === true && existing.templateId) {
+    templateSync = await applySmartMenuTemplateCoordinates(env, existing);
+  }
   const project = await loadSmartMenuProject(env, projectId);
-  return json({ ok: true, success: true, asset: { id: assetId, imageUrl: `/api/admin/smart-menu/assets/${assetId}` }, project });
+  await writeAudit(request, env, "smart_menu_image_update", "smart_menu_project", projectId, existing, project);
+  return json({ ok: true, success: true, asset: { id: assetId, imageUrl: `/api/admin/smart-menu/assets/${assetId}` }, templateSync, project });
+}
+
+async function applySmartMenuTemplateCoordinates(env, project) {
+  if (!project?.templateId) return { synced: false, areaCount: 0, templateId: "" };
+  const template = await loadSmartMenuTemplate(env, project.templateId);
+  if (!template) throw new Error("來源模板不存在，無法同步座標。");
+  if (!template.areas.length) throw new Error("來源模板沒有可同步的熱區。");
+  const currentByIndex = new Map((project.areas || []).map((area, index) => [Number(area.areaIndex ?? index), area]));
+  const nextAreas = template.areas.map((templateArea, index) => {
+    const areaIndex = Number(templateArea.areaIndex ?? index);
+    const current = currentByIndex.get(areaIndex);
+    return {
+      id: current?.id || "",
+      areaIndex,
+      label: templateArea.label,
+      x: templateArea.x,
+      y: templateArea.y,
+      width: templateArea.width,
+      height: templateArea.height,
+      action: current?.action || templateArea.action,
+    };
+  });
+  await replaceSmartMenuAreas(env, smartMenuWorkspaceId(), project.id, nextAreas);
+  await env.DB.prepare(`
+    UPDATE smart_menu_projects
+    SET updated_at = datetime('now')
+    WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL
+  `).bind(project.id, smartMenuWorkspaceId()).run();
+  return { synced: true, areaCount: nextAreas.length, templateId: template.id, templateName: template.name };
+}
+
+async function syncSmartMenuProjectTemplateCoordinates(request, env, projectId) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const existing = await loadSmartMenuProject(env, projectId);
+  if (!existing) return json({ ok: false, success: false, error: "project_not_found" }, 404);
+  if (!existing.templateId) return json({ ok: false, success: false, error: "此專案沒有來源模板，無法同步座標。" }, 409);
+  try {
+    const templateSync = await applySmartMenuTemplateCoordinates(env, existing);
+    const project = await loadSmartMenuProject(env, projectId);
+    await writeAudit(request, env, "smart_menu_template_coordinates_sync", "smart_menu_project", projectId, existing, project);
+    return json({ ok: true, success: true, templateSync, project });
+  } catch (error) {
+    return json({ ok: false, success: false, error: error?.message || "template_coordinate_sync_failed" }, 409);
+  }
 }
 
 async function getSmartMenuAsset(request, env, assetId) {
