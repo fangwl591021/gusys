@@ -39,6 +39,9 @@
     .store-preview-icon{display:grid;width:58px;height:58px;margin:0 auto 12px;place-items:center;border-radius:50%;background:var(--accent);font-size:24px}
     .store-preview strong{display:block;font-size:17px;line-height:1.4}
     .store-preview span{display:block;margin-top:6px;color:#c7d1cd;font-size:12px;line-height:1.5}
+    .store-video-frame{display:grid;max-height:70vh;place-items:center;overflow:hidden;background:#000}
+    .store-video-frame video{display:block;width:100%;max-height:70vh;object-fit:contain;background:#000}
+    .store-video-error{width:100%;padding:42px 20px;color:#fff;text-align:center;line-height:1.6}
     .card{overflow:hidden;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 22px rgba(31,52,44,.06)}
     .card.featured{border-top:4px solid var(--accent)}
     .card-body{padding:16px}
@@ -110,7 +113,7 @@
 
   <script>
     const LIFF_ID="2010583609-wHgSLAEF";
-    const STORE_VIDEOS=[
+    const FALLBACK_STORE_VIDEOS=[
       {
         id:"store-live-001",type:"store-video",categories:["store"],media:"官方影音",
         title:"重口味現場直擊",
@@ -170,7 +173,7 @@
       }
     ];
 
-    const state={filter:"all",liffReady:false};
+    const state={filter:"all",liffReady:false,storeVideos:[...FALLBACK_STORE_VIDEOS]};
     const storeSection=document.getElementById("storeSection");
     const storeVideoGrid=document.getElementById("storeVideoGrid");
     const videoGrid=document.getElementById("videoGrid");
@@ -210,14 +213,23 @@
 
     function storeVideoMarkup(item){
       const url=validExternalUrl(item.sourceUrl);
+      const posterUrl=validExternalUrl(item.posterUrl);
       const action=url?'<a class="btn external primary" href="'+escapeHtml(url)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(item.sourceLabel||"開啟店家影音")+'</a>':'<span class="btn disabled" aria-disabled="true">影片目前暫時無法播放</span>';
+      const media=item.playbackMode==="html5"&&url?'<div class="store-video-frame"><video controls playsinline preload="metadata" src="'+escapeHtml(url)+'"'+(posterUrl?' poster="'+escapeHtml(posterUrl)+'"':'')+' aria-label="'+escapeHtml(item.title)+'"></video><div class="store-video-error hidden">影片目前暫時無法播放<br>請使用下方按鈕開啟原始影音。</div></div>':'<div class="store-preview"><div><span class="store-preview-icon" aria-hidden="true">▶</span><strong>店家現場影音</strong><span>此來源需於外部視窗開啟</span></div></div>';
       return '<article class="card store-card media-item" data-id="'+escapeHtml(item.id)+'">'+
-        '<div class="store-preview"><div><span class="store-preview-icon" aria-hidden="true">▶</span><strong>店家現場影音</strong><span>此來源需於外部視窗開啟</span></div></div>'+
+        media+
         '<div class="card-body"><div class="meta"><span class="badge">'+escapeHtml(item.media||"官方影音")+'</span><span>店家自有內容</span></div><div class="title">'+escapeHtml(item.title)+'</div><p class="desc">'+escapeHtml(item.description)+'</p><div class="actions">'+action+'</div></div></article>';
     }
 
     function visibleItems(){return MEDIA_ITEMS.filter(item=>state.filter==="all"||item.categories.includes(state.filter))}
-    function visibleStoreVideos(){return STORE_VIDEOS.filter(item=>state.filter==="all"||item.categories.includes(state.filter))}
+    function visibleStoreVideos(){return state.storeVideos.filter(item=>state.filter==="all"||item.categories.includes(state.filter))}
+
+    function bindStoreVideoErrors(){
+      storeVideoGrid.querySelectorAll("video").forEach(video=>video.addEventListener("error",()=>{
+        video.classList.add("hidden");
+        video.parentElement?.querySelector(".store-video-error")?.classList.remove("hidden");
+      },{once:true}));
+    }
 
     function render(){
       const storeVideos=visibleStoreVideos();
@@ -225,6 +237,7 @@
       const videos=visible.filter(item=>item.type==="video");
       const articles=visible.filter(item=>item.type==="article");
       storeVideoGrid.innerHTML=storeVideos.map(storeVideoMarkup).join("");
+      bindStoreVideoErrors();
       videoGrid.innerHTML=videos.map(videoMarkup).join("");
       articleGrid.innerHTML=articles.map(articleMarkup).join("");
       document.getElementById("storeVideoCount").textContent=storeVideos.length?storeVideos.length+" 則":"";
@@ -236,6 +249,21 @@
       articleGrid.previousElementSibling.classList.toggle("hidden",articles.length===0);
       articleGrid.classList.toggle("hidden",articles.length===0);
       emptyState.classList.toggle("hidden",storeVideos.length+visible.length!==0);
+    }
+
+    async function loadStoreVideos(){
+      try{
+        const response=await fetch("/api/media-wall/store-videos",{headers:{accept:"application/json"},cache:"no-store"});
+        if(!response.ok)throw new Error("HTTP "+response.status);
+        const payload=await response.json();
+        const rows=Array.isArray(payload?.data)?payload.data:[];
+        state.storeVideos=rows.map(item=>({
+          id:String(item.id||""),type:"store-video",categories:["store"],media:String(item.mediaLabel||"官方影音"),
+          title:String(item.title||""),description:String(item.description||""),sourceUrl:String(item.sourceUrl||""),
+          sourceLabel:String(item.sourceLabel||"開啟店家影音"),playbackMode:item.playbackMode==="html5"?"html5":"external",posterUrl:String(item.posterUrl||"")
+        })).filter(item=>item.id&&item.title&&validExternalUrl(item.sourceUrl));
+        render();
+      }catch(error){console.warn("Store videos API unavailable; fallback retained",error)}
     }
 
     function loadVideo(container){
@@ -288,6 +316,7 @@
     });
 
     render();
+    loadStoreVideos();
     window.addEventListener("load",initLiff,{once:true});
   </script>
 </body>
