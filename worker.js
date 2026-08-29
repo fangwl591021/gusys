@@ -26,6 +26,18 @@ const LINE_AI_MENU_KEYWORDS = new Set([
   "常見問題(FAQ)",
 ]);
 
+const LINE_NAVIGATION_MENU_KEYWORD = "導航與停車指南";
+const LINE_STORE_LOCATION = {
+  name: "重口味溫泉魚",
+  address: "宜蘭縣礁溪鄉仁愛路23號",
+};
+// Public straight-line references around Tangweigou Park; not live availability or walking estimates.
+const LINE_NEARBY_PARKING_PLACES = [
+  { name: "湯圍溝停車場", proximity: "距湯圍溝公園約 27 公尺" },
+  { name: "盱江新村停車場", proximity: "距湯圍溝公園約 128 公尺" },
+  { name: "川湯春天溫泉酒店站前停車場", proximity: "距湯圍溝公園約 202 公尺" },
+];
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -588,6 +600,81 @@ function formatLineAiReplyText(raw, keyword) {
   return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function googleMapsSearchUrl(query) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(query || "").trim())}`;
+}
+
+function buildLineParkingFlexMessage() {
+  const storeMapUrl = googleMapsSearchUrl(`${LINE_STORE_LOCATION.name} ${LINE_STORE_LOCATION.address}`);
+  const bubbles = LINE_NEARBY_PARKING_PLACES.map((place, index) => ({
+    type: "bubble",
+    size: "kilo",
+    header: {
+      type: "box",
+      layout: "horizontal",
+      backgroundColor: "#0F766E",
+      paddingAll: "16px",
+      contents: [
+        { type: "text", text: `🅿️ 停車選擇 ${index + 1}`, color: "#FFFFFF", weight: "bold", size: "sm" },
+      ],
+    },
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "md",
+      paddingAll: "18px",
+      contents: [
+        { type: "text", text: place.name, weight: "bold", size: "lg", color: "#0F172A", wrap: true },
+        {
+          type: "box",
+          layout: "horizontal",
+          spacing: "sm",
+          contents: [
+            { type: "text", text: "📍", flex: 0, size: "sm" },
+            { type: "text", text: place.proximity, size: "sm", color: "#475569", wrap: true },
+          ],
+        },
+        { type: "separator", margin: "sm", color: "#E2E8F0" },
+        { type: "text", text: "實際空位、入口與費率請以現場公告為準。", size: "xs", color: "#64748B", wrap: true },
+      ],
+    },
+    footer: {
+      type: "box",
+      layout: "vertical",
+      spacing: "sm",
+      paddingAll: "14px",
+      contents: [
+        {
+          type: "button",
+          style: "primary",
+          color: "#06C755",
+          height: "sm",
+          action: {
+            type: "uri",
+            label: "導航到停車場",
+            uri: googleMapsSearchUrl(`${place.name} 宜蘭礁溪`),
+          },
+        },
+        {
+          type: "button",
+          style: "link",
+          height: "sm",
+          action: {
+            type: "uri",
+            label: "查看門市位置",
+            uri: storeMapUrl,
+          },
+        },
+      ],
+    },
+  }));
+  return {
+    type: "flex",
+    altText: "導航與停車指南：提供湯圍溝公園附近 3 處停車選擇",
+    contents: { type: "carousel", contents: bubbles },
+  };
+}
+
 async function generateLineAiMenuReply(env, target, limits) {
   const config = await resolveGeminiConfig(env);
   if (!config.apiKey) throw new Error(config.configurationError || "gemini_api_key_missing");
@@ -658,14 +745,20 @@ async function buildLineAiMenuReplyDecision(env, events) {
     };
   }
   try {
-    const text = await generateLineAiMenuReply(env, target, limits);
-    await updateLineAiReplyUsage(env, target.eventKey, "success", text);
+    const isParkingGuide = target.keyword === LINE_NAVIGATION_MENU_KEYWORD;
+    const message = isParkingGuide
+      ? buildLineParkingFlexMessage()
+      : { type: "text", text: await generateLineAiMenuReply(env, target, limits) };
+    const responsePreview = isParkingGuide
+      ? LINE_NEARBY_PARKING_PLACES.map(place => place.name).join("、")
+      : message.text;
+    await updateLineAiReplyUsage(env, target.eventKey, "success", responsePreview);
     return {
       handled: true,
       outcome: "success",
       eventKey: target.eventKey,
-      replyPayload: { replyToken: target.replyToken, messages: [{ type: "text", text }] },
-      summary: { handled: true, outcome: "success", keyword: target.keyword },
+      replyPayload: { replyToken: target.replyToken, messages: [message] },
+      summary: { handled: true, outcome: "success", keyword: target.keyword, responseType: message.type },
     };
   } catch (error) {
     await updateLineAiReplyUsage(env, target.eventKey, "error", String(error?.message || error)).catch(() => {});
