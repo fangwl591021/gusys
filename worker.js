@@ -5744,10 +5744,25 @@ async function applySmartMenuTemplateCoordinates(env, project) {
   const template = await loadSmartMenuTemplate(env, project.templateId);
   if (!template) throw new Error("來源模板不存在，無法同步座標。");
   if (!template.areas.length) throw new Error("來源模板沒有可同步的熱區。");
-  const currentByIndex = new Map((project.areas || []).map((area, index) => [Number(area.areaIndex ?? index), area]));
+  const currentAreas = [...(project.areas || [])];
+  const remainingAreas = [...currentAreas];
+  const areaKey = value => String(value || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
   const nextAreas = template.areas.map((templateArea, index) => {
     const areaIndex = Number(templateArea.areaIndex ?? index);
-    const current = currentByIndex.get(areaIndex);
+    const templateLabel = areaKey(templateArea.label);
+    let matchIndex = remainingAreas.findIndex(area => areaKey(area.label) === templateLabel);
+    if (matchIndex < 0 && templateLabel) {
+      matchIndex = remainingAreas.findIndex(area => {
+        const currentLabel = areaKey(area.label);
+        const currentActionText = areaKey(area.action?.text);
+        return (currentLabel.length >= 2 && (templateLabel.includes(currentLabel) || currentLabel.includes(templateLabel)))
+          || (currentActionText.length >= 2 && (templateLabel.includes(currentActionText) || currentActionText.includes(templateLabel)));
+      });
+    }
+    if (matchIndex < 0 && currentAreas.length === template.areas.length) {
+      matchIndex = remainingAreas.findIndex(area => Number(area.areaIndex) === areaIndex);
+    }
+    const current = matchIndex >= 0 ? remainingAreas.splice(matchIndex, 1)[0] : null;
     return {
       id: current?.id || "",
       areaIndex,
