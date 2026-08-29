@@ -219,6 +219,35 @@ function makeMemberShareCode() {
   return `M${crypto.randomUUID().replace(/-/g, "").slice(0, 19)}`;
 }
 
+function buildMemberShareLiffUrl(liffId, shareCode) {
+  const id = String(liffId || "").trim();
+  const code = normalizeMemberShareCode(shareCode);
+  if (!id || !code) return "";
+  const params = new URLSearchParams({ ref: code, source: "line_invite" });
+  return `https://liff.line.me/${encodeURIComponent(id)}?${params.toString()}`;
+}
+
+function memberShareCodeFromShopUrl(url) {
+  const directCode = normalizeMemberShareCode(url.searchParams.get("ref"));
+  if (/^M[A-Za-z0-9_-]{8,47}$/.test(directCode)) return directCode;
+  const rawState = String(url.searchParams.get("liff.state") || "").trim();
+  if (!rawState) return "";
+  let decodedState = rawState;
+  try {
+    decodedState = decodeURIComponent(rawState);
+  } catch (_) {}
+  let stateParams;
+  try {
+    stateParams = new URL(decodedState, "https://liff.local/").searchParams;
+  } catch (_) {}
+  if (!stateParams?.get("ref")) {
+    const query = decodedState.includes("?") ? decodedState.slice(decodedState.indexOf("?") + 1) : decodedState.replace(/^#/, "");
+    stateParams = new URLSearchParams(query);
+  }
+  const stateCode = normalizeMemberShareCode(stateParams.get("ref"));
+  return /^M[A-Za-z0-9_-]{8,47}$/.test(stateCode) ? stateCode : "";
+}
+
 async function ensureMemberShareSchema(env) {
   requireDb(env);
   await env.DB.batch([
@@ -265,6 +294,7 @@ async function getOrCreateMemberShareLink(env, event) {
   const profile = await ensureCustomerFromLineEvent(env, event);
   if (!profile?.lineUserId) throw new Error("member_identity_missing");
   await ensureMemberShareSchema(env);
+  const settings = await getPublicHookteaSettings(env);
   let row = await env.DB.prepare(`
     SELECT share_code AS shareCode, owner_line_user_id AS ownerLineUserId,
            invite_url AS inviteUrl, qr_url AS qrUrl, click_count AS clickCount,
@@ -275,7 +305,8 @@ async function getOrCreateMemberShareLink(env, event) {
   `).bind(profile.lineUserId).first();
   if (!row) {
     const shareCode = makeMemberShareCode();
-    const inviteUrl = `${workerPublicBase(env)}/r/${encodeURIComponent(shareCode)}`;
+    const inviteUrl = buildMemberShareLiffUrl(settings.liff_id || env.LINE_LIFF_ID, shareCode)
+      || `${workerPublicBase(env)}/r/${encodeURIComponent(shareCode)}`;
     const qrUrl = buildQrUrl(inviteUrl);
     await env.DB.prepare(`
       INSERT INTO member_share_links (
@@ -284,6 +315,19 @@ async function getOrCreateMemberShareLink(env, event) {
       ) VALUES (?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
     `).bind(crypto.randomUUID(), shareCode, profile.lineUserId, inviteUrl, qrUrl).run();
     row = { shareCode, ownerLineUserId: profile.lineUserId, inviteUrl, qrUrl, clickCount: 0, joinCount: 0 };
+  } else {
+    const inviteUrl = buildMemberShareLiffUrl(settings.liff_id || env.LINE_LIFF_ID, row.shareCode)
+      || `${workerPublicBase(env)}/r/${encodeURIComponent(row.shareCode)}`;
+    const qrUrl = buildQrUrl(inviteUrl);
+    if (row.inviteUrl !== inviteUrl || row.qrUrl !== qrUrl) {
+      await env.DB.prepare(`
+        UPDATE member_share_links
+        SET invite_url = ?, qr_url = ?, updated_at = datetime('now')
+        WHERE share_code = ?
+      `).bind(inviteUrl, qrUrl, row.shareCode).run();
+      row.inviteUrl = inviteUrl;
+      row.qrUrl = qrUrl;
+    }
   }
   await env.DB.prepare(`
     INSERT INTO member_referral_events (
@@ -295,53 +339,27 @@ async function getOrCreateMemberShareLink(env, event) {
 
 function buildLineMemberShareFlexMessage(share) {
   const inviteUrl = String(share.inviteUrl || "");
-  const shareText = `我邀請你加入會員，點這裡完成 LINE 登入：\n${inviteUrl}`;
+  const shareText = `邀請你加入 HookTea 會員：\n${inviteUrl}`;
   return {
     type: "flex",
-    altText: `掃碼加入會員｜${share.ownerName || "好友"}的專屬分享`,
+    altText: "HookTea 推薦好友",
     contents: {
       type: "bubble",
       size: "mega",
-      header: {
-        type: "box",
-        layout: "vertical",
-        paddingAll: "18px",
-        contents: [
-          { type: "text", text: "掃碼加入會員", align: "center", weight: "bold", size: "xl", color: "#243443" },
-          { type: "text", text: `由 ${share.ownerName || "LINE 會員"} 分享`, align: "center", size: "sm", color: "#6B7280", margin: "sm" },
-        ],
-      },
-      hero: {
-        type: "image",
-        url: String(share.qrUrl || buildQrUrl(inviteUrl)),
-        size: "full",
-        aspectRatio: "1:1",
-        aspectMode: "fit",
-        backgroundColor: "#FFFFFF",
-        action: { type: "uri", uri: inviteUrl },
-      },
       body: {
         type: "box",
         layout: "vertical",
-        paddingAll: "16px",
+        spacing: "lg",
         contents: [
-          { type: "text", text: "分享網址", size: "xs", color: "#6B7280" },
-          { type: "text", text: inviteUrl, size: "sm", color: "#2563EB", wrap: true, margin: "sm", action: { type: "uri", uri: inviteUrl } },
-        ],
-      },
-      footer: {
-        type: "box",
-        layout: "vertical",
-        spacing: "sm",
-        paddingAll: "14px",
-        contents: [
+          { type: "text", text: "推薦好友加入會員", weight: "bold", size: "xl", align: "center", color: "#1F2937" },
+          { type: "image", url: String(share.qrUrl || buildQrUrl(inviteUrl)), size: "full", aspectMode: "fit", aspectRatio: "1:1", action: { type: "uri", uri: inviteUrl } },
           {
             type: "button",
             style: "primary",
-            color: "#247BC1",
-            action: { type: "uri", label: "分享給好友", uri: `https://line.me/R/share?text=${encodeURIComponent(shareText)}` },
+            color: "#1F7BC6",
+            height: "sm",
+            action: { type: "uri", label: "分享給好友", uri: `https://line.me/R/msg/text/?${encodeURIComponent(shareText)}` },
           },
-          { type: "button", style: "link", action: { type: "uri", label: "開啟分享網址", uri: inviteUrl } },
         ],
       },
     },
@@ -6197,6 +6215,10 @@ async function renderShopPage(request, env) {
     loadError = String(error?.message || error);
   }
   const liffState = String(url.searchParams.get("liff.state") || "").trim();
+  const memberShareCode = memberShareCodeFromShopUrl(url);
+  if (memberShareCode) {
+    return Response.redirect(`${workerPublicBase(env)}/r/${encodeURIComponent(memberShareCode)}`, 302);
+  }
   const isHygieneView = url.pathname === "/shop/hygiene"
     || url.searchParams.get("view") === "hygiene"
     || /^\/?hygiene(?:[/?#]|$)/i.test(liffState);
