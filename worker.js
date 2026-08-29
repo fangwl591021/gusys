@@ -236,23 +236,24 @@ function buildMemberShareLiffUrl(liffId, shareCode) {
 async function resolveLineOaIdentity(env, settings = {}) {
   const configuredUrl = String(settings.link_lineoa || env.LINE_OA_ADD_FRIEND_URL || "").trim();
   let displayName = String(env.LINE_OA_NAME || "宜蘭礁溪重口味溫泉魚").trim();
-  if (configuredUrl) return { displayName, addFriendUrl: configuredUrl };
+  if (configuredUrl) return { displayName, addFriendUrl: configuredUrl, chatUrl: configuredUrl };
   const token = String(env.LINE_CHANNEL_ACCESS_TOKEN || "").trim();
-  if (!token) return { displayName, addFriendUrl: "" };
+  if (!token) return { displayName, addFriendUrl: "", chatUrl: "" };
   try {
     const response = await fetch("https://api.line.me/v2/bot/info", {
       headers: { authorization: `Bearer ${token}` },
     });
-    if (!response.ok) return { displayName, addFriendUrl: "" };
+    if (!response.ok) return { displayName, addFriendUrl: "", chatUrl: "" };
     const profile = await response.json();
     displayName = String(profile.displayName || displayName).trim() || displayName;
     const basicId = String(profile.basicId || "").trim();
     return {
       displayName,
       addFriendUrl: basicId ? `https://line.me/R/ti/p/${encodeURIComponent(basicId)}` : "",
+      chatUrl: basicId ? `https://line.me/R/oaMessage/${encodeURIComponent(basicId)}/` : "",
     };
   } catch (_) {
-    return { displayName, addFriendUrl: "" };
+    return { displayName, addFriendUrl: "", chatUrl: "" };
   }
 }
 
@@ -6235,6 +6236,7 @@ async function renderMemberReferralPage(env, settings, shareCode) {
   const liffId = String(settings.liff_id || env.LINE_LIFF_ID || "").trim();
   const oa = await resolveLineOaIdentity(env, settings);
   const addFriendUrl = String(oa.addFriendUrl || "").trim();
+  const chatUrl = String(oa.chatUrl || addFriendUrl).trim();
   return new Response(`<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -6265,11 +6267,12 @@ async function renderMemberReferralPage(env, settings, shareCode) {
     const LIFF_ID=${JSON.stringify(liffId)};
     const SHARE_CODE=${JSON.stringify(shareCode)};
     const ADD_FRIEND_URL=${JSON.stringify(addFriendUrl)};
+    const OA_CHAT_URL=${JSON.stringify(chatUrl)};
     const statusEl=document.getElementById("status");
     const addFriend=document.getElementById("addFriend");
     const retry=document.getElementById("retry");
     function showAddFriend(message){statusEl.textContent=message||"尚未加入官方帳號";addFriend.hidden=!ADD_FRIEND_URL;retry.hidden=false;if(!ADD_FRIEND_URL){statusEl.classList.add("error");statusEl.textContent="官方帳號加好友網址尚未設定，請聯絡管理員。"}}
-    async function bindReferral(profile){const response=await fetch("/api/referrals/bind",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({share:SHARE_CODE,lineUserId:profile.userId,displayName:profile.displayName||"",pictureUrl:profile.pictureUrl||"",source:"referral_liff"})});const body=await response.json();if(!response.ok||body.ok===false)throw new Error(body.message||body.error||("HTTP "+response.status));statusEl.textContent="已加入官方帳號，推薦歸屬完成。";addFriend.hidden=true;retry.hidden=true;}
+    async function bindReferral(profile){const response=await fetch("/api/referrals/bind",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({share:SHARE_CODE,lineUserId:profile.userId,displayName:profile.displayName||"",pictureUrl:profile.pictureUrl||"",source:"referral_liff"})});const body=await response.json();if(!response.ok||body.ok===false)throw new Error(body.message||body.error||("HTTP "+response.status));statusEl.textContent="已加入官方帳號，推薦歸屬完成，正在開啟聊天室...";addFriend.hidden=true;retry.hidden=true;setTimeout(()=>{location.href=OA_CHAT_URL||ADD_FRIEND_URL},650);}
     async function start(){statusEl.classList.remove("error");statusEl.textContent="正在確認 LINE 好友狀態...";retry.hidden=true;try{if(!LIFF_ID||!window.liff)throw new Error("LIFF 尚未設定");await liff.init({liffId:LIFF_ID});if(!liff.isLoggedIn()){liff.login({redirectUri:location.href.split("#")[0]});return}const profile=await liff.getProfile();let friendship=null;try{friendship=await liff.getFriendship()}catch(error){console.warn("friendship check failed",error)}if(!friendship||!friendship.friendFlag){showAddFriend("還差最後一步，請先加入 LINE 官方帳號。");return}await bindReferral(profile)}catch(error){console.error(error);statusEl.classList.add("error");statusEl.textContent="處理失敗："+(error.message||error);retry.hidden=false}}
     retry.onclick=start;
     start();
