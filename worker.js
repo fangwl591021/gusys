@@ -37,6 +37,8 @@ const LINE_NAVIGATION_MENU_KEYWORD = "導航與停車指南";
 const LINE_POOL_HYGIENE_MENU_KEYWORD = "入池衛生須知";
 const LINE_BUSINESS_HOURS_MENU_KEYWORD = "營業時間與公休";
 const LINE_JIAOXI_RECOMMENDATION_MENU_KEYWORD = "礁溪順遊推薦";
+const LINE_CUSTOMER_SERVICE_MENU_KEYWORD = "聯絡客服";
+const LINE_CUSTOMER_SERVICE_PHONE = "0985197664";
 const LINE_MEMBER_SHARE_MENU_KEYWORDS = new Set(["分享好友拿優惠", "會員分享", "分享好友"]);
 const LINE_KEYWORD_MENU_REPLIES = new Map([
   ["最新活動", "📌 最新活動\n\n目前活動資訊以現場與 LINE 官方帳號公告為準。\n\n• 一般散客無須預約，營業時間內直接到店即可\n• 當日購票不限時間，蓋章後可重複進場\n\n如需確認當日活動，請點選「聯絡客服」。"],
@@ -915,6 +917,41 @@ function buildLineBusinessHoursMessage() {
   };
 }
 
+function buildLineCustomerServiceFlexMessage() {
+  return {
+    type: "flex",
+    altText: `聯絡客服：${formatTaiwanPhone(LINE_CUSTOMER_SERVICE_PHONE)}`,
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        paddingAll: "20px",
+        contents: [
+          { type: "text", text: "📞 聯絡客服", size: "xl", weight: "bold", color: "#0F172A" },
+          { type: "text", text: "需要立即協助，可直接撥打客服電話。也可以留在聊天室留言，工作人員會協助回覆。", size: "sm", color: "#475569", wrap: true },
+          { type: "text", text: formatTaiwanPhone(LINE_CUSTOMER_SERVICE_PHONE), size: "xxl", weight: "bold", color: "#06C755" },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "14px",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            color: "#06C755",
+            action: { type: "uri", label: "撥打客服電話", uri: `tel:${LINE_CUSTOMER_SERVICE_PHONE}` },
+          },
+        ],
+      },
+    },
+  };
+}
+
 function lineJiaoxiRecommendationCategory(keyword) {
   return LINE_JIAOXI_RECOMMENDATION_CATEGORIES.find(category => category.keyword === keyword) || null;
 }
@@ -1223,12 +1260,14 @@ async function buildLineKeywordMenuReplyDecision(env, events) {
     const isPoolHygieneGuide = target.keyword === LINE_POOL_HYGIENE_MENU_KEYWORD;
     const isBusinessHours = target.keyword === LINE_BUSINESS_HOURS_MENU_KEYWORD;
     const isJiaoxiRecommendationMenu = target.keyword === LINE_JIAOXI_RECOMMENDATION_MENU_KEYWORD;
+    const isCustomerService = target.keyword === LINE_CUSTOMER_SERVICE_MENU_KEYWORD;
     const jiaoxiRecommendationCategory = lineJiaoxiRecommendationCategory(target.keyword);
     let message;
     if (isParkingGuide) message = buildLineParkingFlexMessage();
     else if (isPoolHygieneGuide) message = await buildLinePoolHygieneFlexMessage(env);
     else if (isBusinessHours) message = buildLineBusinessHoursMessage();
     else if (isJiaoxiRecommendationMenu) message = buildLineJiaoxiRecommendationMenuMessage();
+    else if (isCustomerService) message = buildLineCustomerServiceFlexMessage();
     else if (jiaoxiRecommendationCategory) message = buildLineJiaoxiRecommendationFlexMessage(jiaoxiRecommendationCategory);
     else message = { type: "text", text: LINE_KEYWORD_MENU_REPLIES.get(target.keyword) || "請點選「聯絡客服」留言詢問。" };
     return {
