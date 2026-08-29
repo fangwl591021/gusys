@@ -28,6 +28,7 @@ const LINE_AI_MENU_KEYWORDS = new Set([
 
 const LINE_NAVIGATION_MENU_KEYWORD = "導航與停車指南";
 const LINE_POOL_HYGIENE_MENU_KEYWORD = "入池衛生須知";
+const LINE_MEMBER_SHARE_MENU_KEYWORDS = new Set(["分享好友拿優惠", "會員分享", "分享好友"]);
 const LINE_POOL_HYGIENE_ASSET_ID = "asset_5d864d4b-66c6-45a9-89ef-933578d77a0d";
 const LINE_POOL_HYGIENE_RULES = [
   ["入池洗腳", "入池前請先洗腳，共同維護水質。"],
@@ -69,6 +70,8 @@ export default {
       if (url.pathname === "/hub-test") return handleHubTest(env);
       if (url.pathname === "/line-webhook") return handleLineWebhook(request, env, ctx);
       if (url.pathname === "/sales/invite") return renderSalesInvitePage(request, env);
+      if (url.pathname.startsWith("/r/") && request.method === "GET") return redirectMemberShare(request, env, decodeURIComponent(url.pathname.slice(3)));
+      if (url.pathname === "/api/referrals/bind" && (request.method === "POST" || request.method === "GET")) return bindMemberReferral(request, env);
       if (url.pathname.startsWith("/api/admin/webhook") && request.method === "GET") return listAdminWebhookEvents(request, env);
       if (url.pathname === "/api/admin/summary" && request.method === "GET") return adminSummary(request, env);
       if (url.pathname === "/api/admin/audit-logs" && request.method === "GET") return listAuditLogs(request, env);
@@ -206,6 +209,143 @@ function buildSalesInviteUrl(env, salesCode) {
 
 function buildQrUrl(inviteUrl) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=18&data=${encodeURIComponent(inviteUrl)}`;
+}
+
+function normalizeMemberShareCode(value) {
+  return String(value || "").trim().replace(/[^A-Za-z0-9_-]/g, "").slice(0, 48);
+}
+
+function makeMemberShareCode() {
+  return `M${crypto.randomUUID().replace(/-/g, "").slice(0, 19)}`;
+}
+
+async function ensureMemberShareSchema(env) {
+  requireDb(env);
+  await env.DB.batch([
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS member_share_links (
+      id TEXT PRIMARY KEY,
+      share_code TEXT NOT NULL UNIQUE,
+      owner_line_user_id TEXT NOT NULL UNIQUE,
+      invite_url TEXT NOT NULL DEFAULT '',
+      qr_url TEXT NOT NULL DEFAULT '',
+      click_count INTEGER NOT NULL DEFAULT 0,
+      join_count INTEGER NOT NULL DEFAULT 0,
+      last_clicked_at TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_member_share_links_owner ON member_share_links(owner_line_user_id)"),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS member_referral_events (
+      id TEXT PRIMARY KEY,
+      share_code TEXT NOT NULL,
+      owner_line_user_id TEXT NOT NULL,
+      referred_line_user_id TEXT NOT NULL DEFAULT '',
+      event_type TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_member_referral_events_share ON member_referral_events(share_code, created_at)"),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_member_referral_events_referred ON member_referral_events(referred_line_user_id, event_type)"),
+  ]);
+}
+
+function buildMemberShareMotherUrl(env, shareCode) {
+  const normalized = normalizeMemberShareCode(shareCode);
+  const url = new URL(motherMemberBaseUrl(env));
+  url.searchParams.set("ref", normalized);
+  url.searchParams.set("source", "member_share");
+  const bindUrl = new URL(`${workerPublicBase(env)}/api/referrals/bind`);
+  bindUrl.searchParams.set("share", normalized);
+  bindUrl.searchParams.set("source", "mother_site");
+  url.searchParams.set("gusys_bind", bindUrl.toString());
+  return url.toString();
+}
+
+async function getOrCreateMemberShareLink(env, event) {
+  const profile = await ensureCustomerFromLineEvent(env, event);
+  if (!profile?.lineUserId) throw new Error("member_identity_missing");
+  await ensureMemberShareSchema(env);
+  let row = await env.DB.prepare(`
+    SELECT share_code AS shareCode, owner_line_user_id AS ownerLineUserId,
+           invite_url AS inviteUrl, qr_url AS qrUrl, click_count AS clickCount,
+           join_count AS joinCount
+    FROM member_share_links
+    WHERE owner_line_user_id = ?
+    LIMIT 1
+  `).bind(profile.lineUserId).first();
+  if (!row) {
+    const shareCode = makeMemberShareCode();
+    const inviteUrl = `${workerPublicBase(env)}/r/${encodeURIComponent(shareCode)}`;
+    const qrUrl = buildQrUrl(inviteUrl);
+    await env.DB.prepare(`
+      INSERT INTO member_share_links (
+        id, share_code, owner_line_user_id, invite_url, qr_url,
+        click_count, join_count, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
+    `).bind(crypto.randomUUID(), shareCode, profile.lineUserId, inviteUrl, qrUrl).run();
+    row = { shareCode, ownerLineUserId: profile.lineUserId, inviteUrl, qrUrl, clickCount: 0, joinCount: 0 };
+  }
+  await env.DB.prepare(`
+    INSERT INTO member_referral_events (
+      id, share_code, owner_line_user_id, referred_line_user_id, event_type, source, created_at
+    ) VALUES (?, ?, ?, '', 'card_generated', 'line_rich_menu', datetime('now'))
+  `).bind(crypto.randomUUID(), row.shareCode, profile.lineUserId).run();
+  return { ...row, ownerName: profile.displayName || "LINE 會員" };
+}
+
+function buildLineMemberShareFlexMessage(share) {
+  const inviteUrl = String(share.inviteUrl || "");
+  const shareText = `我邀請你加入會員，點這裡完成 LINE 登入：\n${inviteUrl}`;
+  return {
+    type: "flex",
+    altText: `掃碼加入會員｜${share.ownerName || "好友"}的專屬分享`,
+    contents: {
+      type: "bubble",
+      size: "mega",
+      header: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "18px",
+        contents: [
+          { type: "text", text: "掃碼加入會員", align: "center", weight: "bold", size: "xl", color: "#243443" },
+          { type: "text", text: `由 ${share.ownerName || "LINE 會員"} 分享`, align: "center", size: "sm", color: "#6B7280", margin: "sm" },
+        ],
+      },
+      hero: {
+        type: "image",
+        url: String(share.qrUrl || buildQrUrl(inviteUrl)),
+        size: "full",
+        aspectRatio: "1:1",
+        aspectMode: "fit",
+        backgroundColor: "#FFFFFF",
+        action: { type: "uri", uri: inviteUrl },
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "16px",
+        contents: [
+          { type: "text", text: "分享網址", size: "xs", color: "#6B7280" },
+          { type: "text", text: inviteUrl, size: "sm", color: "#2563EB", wrap: true, margin: "sm", action: { type: "uri", uri: inviteUrl } },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        paddingAll: "14px",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            color: "#247BC1",
+            action: { type: "uri", label: "分享給好友", uri: `https://line.me/R/share?text=${encodeURIComponent(shareText)}` },
+          },
+          { type: "button", style: "link", action: { type: "uri", label: "開啟分享網址", uri: inviteUrl } },
+        ],
+      },
+    },
+  };
 }
 
 function makeSalesCode(name) {
@@ -395,6 +535,19 @@ function lineAiMenuEvent(events) {
       lineUserId,
       replyToken,
     };
+  }
+  return null;
+}
+
+function lineMemberShareMenuEvent(events) {
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.type !== "message" || event?.message?.type !== "text") continue;
+    const keyword = String(event.message.text || "").trim();
+    if (!LINE_MEMBER_SHARE_MENU_KEYWORDS.has(keyword)) continue;
+    const lineUserId = String(event.source?.userId || "").trim();
+    const replyToken = String(event.replyToken || "").trim();
+    if (!lineUserId || !replyToken) continue;
+    return { event, keyword, lineUserId, replyToken };
   }
   return null;
 }
@@ -788,6 +941,35 @@ async function generateLineAiMenuReply(env, target, limits) {
 }
 
 async function buildLineAiMenuReplyDecision(env, events) {
+  const shareTarget = lineMemberShareMenuEvent(events);
+  if (shareTarget) {
+    if (!env.DB) {
+      return {
+        handled: true,
+        outcome: "error",
+        replyPayload: { replyToken: shareTarget.replyToken, messages: [{ type: "text", text: "分享功能目前忙碌中，請稍後再試。" }] },
+        summary: { handled: true, outcome: "error", keyword: shareTarget.keyword },
+      };
+    }
+    try {
+      const share = await getOrCreateMemberShareLink(env, shareTarget.event);
+      const message = buildLineMemberShareFlexMessage(share);
+      return {
+        handled: true,
+        outcome: "success",
+        replyPayload: { replyToken: shareTarget.replyToken, messages: [message] },
+        summary: { handled: true, outcome: "success", keyword: shareTarget.keyword, responseType: "flex", shareCode: share.shareCode },
+      };
+    } catch (error) {
+      console.error(JSON.stringify({ level: "error", message: "member_share_card_failed", error: String(error?.message || error) }));
+      return {
+        handled: true,
+        outcome: "error",
+        replyPayload: { replyToken: shareTarget.replyToken, messages: [{ type: "text", text: "分享卡產生失敗，請稍後再試。" }] },
+        summary: { handled: true, outcome: "error", keyword: shareTarget.keyword },
+      };
+    }
+  }
   const target = lineAiMenuEvent(events);
   if (!target) return { handled: false, outcome: "not_applicable", replyPayload: null, summary: { handled: false } };
   if (!env.DB) return buildLineAiFailureDecision(events);
@@ -3132,6 +3314,117 @@ async function bindCustomerToSalesRep(request, env) {
     source: payload.source || "api",
   });
   return json({ ok: true, data: result });
+}
+
+async function redirectMemberShare(request, env, rawShareCode) {
+  await ensureMemberShareSchema(env);
+  const shareCode = normalizeMemberShareCode(rawShareCode);
+  const row = await env.DB.prepare(`
+    SELECT share_code AS shareCode, owner_line_user_id AS ownerLineUserId
+    FROM member_share_links
+    WHERE share_code = ?
+    LIMIT 1
+  `).bind(shareCode).first();
+  if (!row) return new Response("這個分享連結不存在或已失效。", { status: 404, headers: TEXT_HEADERS });
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE member_share_links
+      SET click_count = click_count + 1, last_clicked_at = datetime('now'), updated_at = datetime('now')
+      WHERE share_code = ?
+    `).bind(shareCode),
+    env.DB.prepare(`
+      INSERT INTO member_referral_events (
+        id, share_code, owner_line_user_id, referred_line_user_id, event_type, source, created_at
+      ) VALUES (?, ?, ?, '', 'link_opened', 'share_redirect', datetime('now'))
+    `).bind(crypto.randomUUID(), shareCode, row.ownerLineUserId),
+  ]);
+  return Response.redirect(buildMemberShareMotherUrl(env, shareCode), 302);
+}
+
+async function bindMemberReferral(request, env) {
+  await ensureMemberShareSchema(env);
+  const url = new URL(request.url);
+  const queryPayload = Object.fromEntries(url.searchParams.entries());
+  const bodyPayload = request.method === "GET" ? {} : await request.json().catch(() => ({}));
+  const payload = { ...queryPayload, ...bodyPayload };
+  const shareCode = normalizeMemberShareCode(payload.share || payload.ref || payload.referralCode);
+  const lineUserId = String(payload.lineUserId || payload.LINE_user_id || payload.uid || payload.userId || "").trim();
+  if (!shareCode) return json({ ok: false, error: "missing_share_code" }, 400);
+  if (!lineUserId || !lineUserId.startsWith("U")) {
+    return json({ ok: false, error: "missing_line_user_id", message: "請由母站 LINE 登入後帶 LINE UID 回寫 Gusys" }, 400);
+  }
+  const share = await env.DB.prepare(`
+    SELECT share_code AS shareCode, owner_line_user_id AS ownerLineUserId
+    FROM member_share_links
+    WHERE share_code = ?
+    LIMIT 1
+  `).bind(shareCode).first();
+  if (!share) return json({ ok: false, error: "share_link_not_found" }, 404);
+
+  const profile = await ensureCustomerFromLineEvent(env, { source: { userId: lineUserId }, timestamp: Date.now() });
+  const customer = await env.DB.prepare(`
+    SELECT id, referrer_line_user_id AS referrerLineUserId
+    FROM customers
+    WHERE line_user_id = ?
+    LIMIT 1
+  `).bind(lineUserId).first();
+  let attribution = "already_attributed";
+  if (share.ownerLineUserId === lineUserId) {
+    attribution = "self_referral_rejected";
+  } else if (!String(customer?.referrerLineUserId || "").trim()) {
+    const bound = await env.DB.prepare(`
+      UPDATE customers
+      SET referrer_line_user_id = ?, updated_at = datetime('now')
+      WHERE id = ? AND referrer_line_user_id = ''
+    `).bind(share.ownerLineUserId, customer.id).run();
+    if (Number(bound?.meta?.changes || 0) > 0) {
+      attribution = "bound";
+      await env.DB.prepare(`
+        UPDATE member_share_links
+        SET join_count = join_count + 1, updated_at = datetime('now')
+        WHERE share_code = ?
+      `).bind(shareCode).run();
+      const ownerSalesRep = await env.DB.prepare(`
+        SELECT sales_code AS salesCode
+        FROM sales_reps
+        WHERE line_user_id = ? AND status = 'active'
+        LIMIT 1
+      `).bind(share.ownerLineUserId).first();
+      if (ownerSalesRep?.salesCode) {
+        await bindCustomerBySalesCode(env, {
+          lineUserId,
+          displayName: profile?.displayName || "",
+          pictureUrl: profile?.pictureUrl || "",
+          salesCode: ownerSalesRep.salesCode,
+          source: "member_share",
+        });
+      }
+    } else {
+      const latest = await env.DB.prepare(`SELECT referrer_line_user_id AS referrerLineUserId FROM customers WHERE id = ? LIMIT 1`)
+        .bind(customer.id).first();
+      attribution = latest?.referrerLineUserId === share.ownerLineUserId ? "already_bound_to_owner" : "already_attributed";
+    }
+  } else if (customer.referrerLineUserId === share.ownerLineUserId) {
+    attribution = "already_bound_to_owner";
+  }
+  await env.DB.prepare(`
+    INSERT INTO member_referral_events (
+      id, share_code, owner_line_user_id, referred_line_user_id, event_type, source, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+  `).bind(
+    crypto.randomUUID(),
+    shareCode,
+    share.ownerLineUserId,
+    lineUserId,
+    attribution,
+    String(payload.source || "mother_site").slice(0, 80),
+  ).run();
+  const memberSync = await syncWetwMember(env, {
+    lineUserId,
+    displayName: profile?.displayName || "",
+    pictureUrl: profile?.pictureUrl || "",
+  }).catch(error => ({ ok: false, error: String(error?.message || error) }));
+  return json({ ok: true, data: { lineUserId, shareCode, attribution, memberSync } });
 }
 
 async function checkOrCreateMember(request, env) {
