@@ -27,6 +27,19 @@ const LINE_AI_MENU_KEYWORDS = new Set([
 ]);
 
 const LINE_NAVIGATION_MENU_KEYWORD = "導航與停車指南";
+const LINE_POOL_HYGIENE_MENU_KEYWORD = "入池衛生須知";
+const LINE_POOL_HYGIENE_ASSET_ID = "asset_5d864d4b-66c6-45a9-89ef-933578d77a0d";
+const LINE_POOL_HYGIENE_RULES = [
+  ["入池洗腳", "入池前請先洗腳，共同維護水質。"],
+  ["化學限制", "嚴禁防曬、防蚊等化學物入水，請先洗淨再入池。"],
+  ["水質把關", "採用活水，每日營業後更換池水並消毒。"],
+  ["禁止抓魚", "嚴禁手抓魚、撈魚，請家長留意孩童行為。"],
+  ["小心踏石", "踩踏石頭時請小心，勿重踩或踢水驚魚。"],
+  ["禁止餵食", "絕對禁止餵食任何外來食物。"],
+  ["禁止飲食", "泡腳區全面禁止飲食，飲水除外。"],
+  ["寵物安置", "歡迎攜帶寵物，請置於提籠或推車內，不可下水。"],
+  ["傷口健康", "有開放性傷口或傳染性疾病者嚴禁下水。"],
+];
 const LINE_STORE_LOCATION = {
   name: "重口味溫泉魚",
   address: "宜蘭縣礁溪鄉仁愛路23號",
@@ -51,7 +64,8 @@ export default {
       if (url.pathname === "/action-modules.html") return renderActionModulesPage(request);
       if (url.pathname === "/mylittlesys_free.html") return renderActionFlexEditorPage();
       if (url.pathname === "/api/action-admin" && request.method === "POST") return handleActionAdminCompat(request, env);
-      if (url.pathname === "/shop" || url.pathname === "/huaxu-shop.html") return renderShopPage(env);
+      if (url.pathname === "/shop" || url.pathname === "/huaxu-shop.html") return renderShopPage(request, env);
+      if (url.pathname === "/assets/pool-hygiene-guide.jpg" && request.method === "GET") return getPoolHygieneGuideImage(env);
       if (url.pathname === "/hub-test") return handleHubTest(env);
       if (url.pathname === "/line-webhook") return handleLineWebhook(request, env, ctx);
       if (url.pathname === "/sales/invite") return renderSalesInvitePage(request, env);
@@ -679,6 +693,51 @@ function buildLineParkingFlexMessage() {
   };
 }
 
+async function buildLinePoolHygieneFlexMessage(env) {
+  const settings = await getPublicHookteaSettings(env);
+  const liffId = String(settings.liff_id || env.LINE_LIFF_ID || "").trim();
+  const textUrl = liffId
+    ? `https://liff.line.me/${encodeURIComponent(liffId)}?view=hygiene`
+    : `${workerPublicBase(env)}/shop?view=hygiene`;
+  return {
+    type: "flex",
+    altText: "入池衛生須知：入池前請先閱讀 9 項衛生與安全規範",
+    contents: {
+      type: "bubble",
+      size: "mega",
+      hero: {
+        type: "image",
+        url: `${workerPublicBase(env)}/assets/pool-hygiene-guide.jpg`,
+        size: "full",
+        aspectRatio: "43:64",
+        aspectMode: "fit",
+        backgroundColor: "#F7F5EF",
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        paddingAll: "18px",
+        contents: [
+          { type: "text", text: "入池衛生須知", weight: "bold", size: "xl", color: "#17211B" },
+          { type: "text", text: "入池前請先閱讀完整規範，一起維護水質、魚群與每位遊客的安全。", size: "sm", color: "#526158", wrap: true },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "14px",
+        contents: [{
+          type: "button",
+          style: "primary",
+          color: "#2F7D5B",
+          action: { type: "uri", label: "查看文字版", uri: textUrl },
+        }],
+      },
+    },
+  };
+}
+
 async function generateLineAiMenuReply(env, target, limits) {
   const config = await resolveGeminiConfig(env);
   if (!config.apiKey) throw new Error(config.configurationError || "gemini_api_key_missing");
@@ -750,12 +809,17 @@ async function buildLineAiMenuReplyDecision(env, events) {
   }
   try {
     const isParkingGuide = target.keyword === LINE_NAVIGATION_MENU_KEYWORD;
+    const isPoolHygieneGuide = target.keyword === LINE_POOL_HYGIENE_MENU_KEYWORD;
     const message = isParkingGuide
       ? buildLineParkingFlexMessage()
-      : { type: "text", text: await generateLineAiMenuReply(env, target, limits) };
+      : isPoolHygieneGuide
+        ? await buildLinePoolHygieneFlexMessage(env)
+        : { type: "text", text: await generateLineAiMenuReply(env, target, limits) };
     const responsePreview = isParkingGuide
       ? LINE_NEARBY_PARKING_PLACES.map(place => place.name).join("、")
-      : message.text;
+      : isPoolHygieneGuide
+        ? LINE_POOL_HYGIENE_RULES.map(rule => rule[0]).join("、")
+        : message.text;
     await updateLineAiReplyUsage(env, target.eventKey, "success", responsePreview);
     return {
       handled: true,
@@ -5344,6 +5408,24 @@ async function getSmartMenuAsset(request, env, assetId) {
   return new Response(image.bytes, { headers: { "content-type": image.contentType, "cache-control": "private, max-age=60" } });
 }
 
+async function getPoolHygieneGuideImage(env) {
+  requireDb(env);
+  const row = await env.DB.prepare(`
+    SELECT image_data_url AS imageDataUrl
+    FROM smart_menu_assets
+    WHERE id = ? AND deleted_at IS NULL
+    LIMIT 1
+  `).bind(LINE_POOL_HYGIENE_ASSET_ID).first();
+  const image = parseDataUrlImage(row?.imageDataUrl || "");
+  if (!image) return json({ ok: false, error: "pool_hygiene_image_not_found" }, 404);
+  return new Response(image.bytes, {
+    headers: {
+      "content-type": image.contentType,
+      "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
+    },
+  });
+}
+
 async function publishSmartMenuProject(request, env, projectId) {
   requireAdmin(request, env);
   requireDb(env);
@@ -5766,7 +5848,52 @@ async function monthlySalesReport(request, env) {
   return json({ ok: true, period, data: results || [] });
 }
 
-async function renderShopPage(env) {
+function renderPoolHygieneGuidePage(settings) {
+  const liffId = String(settings.liff_id || "").trim();
+  const ruleCards = LINE_POOL_HYGIENE_RULES.map((rule, index) => `
+      <article class="rule">
+        <div class="number">${index + 1}</div>
+        <div><h2>${escapeHtml(rule[0])}</h2><p>${escapeHtml(rule[1])}</p></div>
+      </article>`).join("");
+  return new Response(`<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>入池衛生須知</title>
+  <style>
+    :root{--ink:#17211b;--muted:#5d6b62;--green:#2f7d5b;--pale:#eef6e8;--line:#dce7d8}
+    *{box-sizing:border-box}body{margin:0;background:#f5f6f2;color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    main{width:min(100%,620px);min-height:100vh;margin:0 auto;background:#fff;padding:calc(22px + env(safe-area-inset-top)) 18px calc(34px + env(safe-area-inset-bottom))}
+    header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:4px 2px 20px;border-bottom:1px solid var(--line)}
+    h1{font-size:26px;line-height:1.25;margin:0 0 7px;letter-spacing:0}.lead{margin:0;color:var(--muted);font-size:14px;line-height:1.6;font-weight:700}
+    .close{flex:0 0 40px;width:40px;height:40px;border:0;border-radius:50%;background:#edf2ee;color:#526158;font-size:24px;line-height:1}
+    .rules{display:grid;gap:11px;padding-top:18px}.rule{display:grid;grid-template-columns:38px 1fr;gap:12px;padding:15px;border:1px solid var(--line);border-radius:8px;background:#fff;box-shadow:0 4px 14px rgba(31,55,42,.05)}
+    .number{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--green);color:#fff;font-weight:900}.rule h2{font-size:17px;margin:1px 0 5px}.rule p{font-size:14px;line-height:1.65;margin:0;color:var(--muted);font-weight:650}
+    .note{margin-top:18px;padding:15px;border-radius:8px;background:var(--pale);color:#345541;font-size:14px;line-height:1.65;font-weight:750}
+  </style>
+</head>
+<body>
+  <main>
+    <header><div><h1>入池衛生須知</h1><p class="lead">重口味溫泉魚｜入池前請完整閱讀</p></div><button class="close" id="closePage" type="button" aria-label="關閉">×</button></header>
+    <section class="rules">${ruleCards}</section>
+    <div class="note">謝謝您共同維護水質、魚群與入池安全。現場狀況請以店家公告與工作人員指引為準。</div>
+  </main>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    const liffId=${JSON.stringify(liffId)};
+    if(liffId&&window.liff)liff.init({liffId}).catch(console.warn);
+    document.getElementById("closePage").onclick=()=>{
+      if(window.liff&&liff.isInClient&&liff.isInClient())liff.closeWindow();
+      else if(history.length>1)history.back();
+      else location.href="/shop";
+    };
+  </script>
+</body>
+</html>`, { headers: HTML_HEADERS });
+}
+
+async function renderShopPage(request, env) {
   let settings = defaultHookteaSettings(env);
   let products = [];
   let loadError = "";
@@ -5775,6 +5902,8 @@ async function renderShopPage(env) {
   } catch (error) {
     loadError = String(error?.message || error);
   }
+  const url = new URL(request.url);
+  if (url.searchParams.get("view") === "hygiene") return renderPoolHygieneGuidePage(settings);
   const brandTitle = String(settings.shop_front_title || settings.shop_name || "HookTea 商城").trim() || "HookTea 商城";
   const heroTitle = String(settings.shop_hero_title || "喚醒 蛻變 完整").trim();
   const heroBadge = String(settings.shop_hero_badge || "").trim();
