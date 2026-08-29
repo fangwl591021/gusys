@@ -604,8 +604,12 @@ function googleMapsSearchUrl(query) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(query || "").trim())}`;
 }
 
+function googleMapsDirectionsUrl(destination) {
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(String(destination || "").trim())}&travelmode=driving&dir_action=navigate`;
+}
+
 function buildLineParkingFlexMessage() {
-  const storeMapUrl = googleMapsSearchUrl(`${LINE_STORE_LOCATION.name} ${LINE_STORE_LOCATION.address}`);
+  const storeMapUrl = googleMapsDirectionsUrl(`${LINE_STORE_LOCATION.name} ${LINE_STORE_LOCATION.address}`);
   const bubbles = LINE_NEARBY_PARKING_PLACES.map((place, index) => ({
     type: "bubble",
     size: "kilo",
@@ -652,7 +656,7 @@ function buildLineParkingFlexMessage() {
           action: {
             type: "uri",
             label: "導航到停車場",
-            uri: googleMapsSearchUrl(`${place.name} 宜蘭礁溪`),
+            uri: googleMapsDirectionsUrl(`${place.name} 宜蘭礁溪`),
           },
         },
         {
