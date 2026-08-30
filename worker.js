@@ -968,15 +968,29 @@ function googleMapsDirectionsUrl(destination) {
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(String(destination || "").trim())}&travelmode=driving&dir_action=navigate`;
 }
 
+function resolveLineNavigationDestination(destinationId) {
+  const id = String(destinationId || "").trim();
+  const fixed = LINE_NAVIGATION_DESTINATIONS.get(id);
+  if (fixed) return fixed;
+  const match = id.match(/^jiaoxi-(food|stay|visit|shop|transport)-(\d+)$/);
+  if (!match) return null;
+  const item = LINE_JIAOXI_RECOMMENDATIONS[match[1]]?.items?.[Number(match[2]) - 1];
+  if (!item?.name) return null;
+  return {
+    label: item.name,
+    destination: `${item.name} 宜蘭縣礁溪鄉`,
+  };
+}
+
 function mobileNavigationUrl(env, destinationId) {
-  const id = LINE_NAVIGATION_DESTINATIONS.has(destinationId) ? destinationId : "store";
+  const id = resolveLineNavigationDestination(destinationId) ? destinationId : "store";
   return `${workerPublicBase(env)}/navigate?to=${encodeURIComponent(id)}`;
 }
 
 function renderMobileNavigationPage(request) {
   const url = new URL(request.url);
   const destinationId = String(url.searchParams.get("to") || "store").trim();
-  const destination = LINE_NAVIGATION_DESTINATIONS.get(destinationId) || LINE_NAVIGATION_DESTINATIONS.get("store");
+  const destination = resolveLineNavigationDestination(destinationId) || LINE_NAVIGATION_DESTINATIONS.get("store");
   const fallbackUrl = googleMapsDirectionsUrl(destination.destination);
   return new Response(`<!doctype html>
 <html lang="zh-Hant">
@@ -1137,9 +1151,10 @@ function formatTaiwanPhone(phone) {
   return value;
 }
 
-function buildLineJiaoxiRecommendationFlexMessage(category) {
+function buildLineJiaoxiRecommendationFlexMessage(category, env) {
   const recommendation = LINE_JIAOXI_RECOMMENDATIONS[category.key];
   const bubbles = recommendation.items.map((place, index) => {
+    const navigationId = `jiaoxi-${category.key}-${index + 1}`;
     const sourceLine = place.imageSource
       ? {
           type: "text",
@@ -1190,7 +1205,7 @@ function buildLineJiaoxiRecommendationFlexMessage(category) {
           style: "primary",
           color: "#06C755",
           height: "sm",
-          action: { type: "uri", label: "開始導航", uri: googleMapsDirectionsUrl(`${place.name} 宜蘭礁溪`) },
+          action: { type: "uri", label: "開始導航", uri: mobileNavigationUrl(env, navigationId) },
         },
         {
           type: "button",
@@ -1579,7 +1594,7 @@ async function buildLineKeywordMenuReplyDecision(env, events) {
     else if (isJiaoxiRecommendationMenu) message = buildLineJiaoxiRecommendationMenuMessage();
     else if (isCustomerService) message = buildLineCustomerServiceFlexMessage();
     else if (isFaq) message = buildLineFaqLinkFlexMessage();
-    else if (jiaoxiRecommendationCategory) message = buildLineJiaoxiRecommendationFlexMessage(jiaoxiRecommendationCategory);
+    else if (jiaoxiRecommendationCategory) message = buildLineJiaoxiRecommendationFlexMessage(jiaoxiRecommendationCategory, env);
     else message = { type: "text", text: LINE_KEYWORD_MENU_REPLIES.get(target.keyword) || "請點選「聯絡客服」留言詢問。" };
     return {
       handled: true,
