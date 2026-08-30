@@ -86,10 +86,14 @@ const LINE_STORE_LOCATION = {
 };
 // Public straight-line references around Tangweigou Park; not live availability or walking estimates.
 const LINE_NEARBY_PARKING_PLACES = [
-  { name: "湯圍溝停車場", proximity: "距湯圍溝公園約 27 公尺" },
-  { name: "盱江新村停車場", proximity: "距湯圍溝公園約 128 公尺" },
-  { name: "川湯春天溫泉酒店站前停車場", proximity: "距湯圍溝公園約 202 公尺" },
+  { id: "tangweigou-parking", name: "湯圍溝停車場", proximity: "距湯圍溝公園約 27 公尺", destination: "湯圍溝停車場 宜蘭縣礁溪鄉" },
+  { id: "xijiang-village-parking", name: "盱江新村停車場", proximity: "距湯圍溝公園約 128 公尺", destination: "盱江新村停車場 宜蘭縣礁溪鄉" },
+  { id: "chungtang-hotel-parking", name: "川湯春天溫泉酒店站前停車場", proximity: "距湯圍溝公園約 202 公尺", destination: "川湯春天溫泉酒店站前停車場 宜蘭縣礁溪鄉" },
 ];
+const LINE_NAVIGATION_DESTINATIONS = new Map([
+  ["store", { label: LINE_STORE_LOCATION.name, destination: "RQGC+X6 德陽村 礁溪鄉 宜蘭縣" }],
+  ...LINE_NEARBY_PARKING_PLACES.map(place => [place.id, { label: place.name, destination: place.destination }]),
+]);
 const LINE_VISITOR_PREP_LINKS = [
   { label: "礁溪即時天氣", uri: "https://www.cwa.gov.tw/V8/C/W/Town/Town.html?TID=1000205" },
   { label: "礁溪站動態", uri: "https://tip.railway.gov.tw/tra-tip-web/tip/tip00H/tipH41/viewStaInfo/7210" },
@@ -167,6 +171,7 @@ export default {
       if (url.pathname === "/assets/pool-hygiene-guide.jpg" && request.method === "GET") return getPoolHygieneGuideImage(env);
       if (url.pathname === "/hub-test") return handleHubTest(env);
       if (url.pathname === "/line-webhook") return handleLineWebhook(request, env, ctx);
+      if (url.pathname === "/navigate" && request.method === "GET") return renderMobileNavigationPage(request);
       if (url.pathname === "/sales/invite") return renderSalesInvitePage(request, env);
       if (url.pathname.startsWith("/r/") && request.method === "GET") return redirectMemberShare(request, env, decodeURIComponent(url.pathname.slice(3)));
       if (url.pathname === "/api/referrals/bind" && (request.method === "POST" || request.method === "GET")) return bindMemberReferral(request, env);
@@ -925,7 +930,7 @@ function lineAiTopicEmoji(keyword) {
   return "💬";
 }
 
-function formatLineAiReplyText(raw, keyword) {
+function formatLineAiReplyText(raw, keyword, env) {
   let text = String(raw || "")
     .replace(/\r\n?/g, "\n")
     .replace(/```[a-z]*\n?/gi, "")
@@ -949,7 +954,7 @@ function formatLineAiReplyText(raw, keyword) {
     const match = text.match(/(?:^|\n)\s*(?:📍\s*)?(?:店家)?地址\s*[：:]\s*([^\n]+)/i);
     const address = String(match?.[1] || "").replace(/[。；;]+$/g, "").trim();
     if (address && !/未提供|未設定|不確定|公告為準|聯絡客服/.test(address)) {
-      text += `\n\n🗺️ Google Maps\nhttps://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+      text += `\n\n🗺️ 使用手機定位導航\n${mobileNavigationUrl(env, "store")}`;
     }
   }
   return text.replace(/\n{3,}/g, "\n\n").trim();
@@ -961,6 +966,56 @@ function googleMapsSearchUrl(query) {
 
 function googleMapsDirectionsUrl(destination) {
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(String(destination || "").trim())}&travelmode=driving&dir_action=navigate`;
+}
+
+function mobileNavigationUrl(env, destinationId) {
+  const id = LINE_NAVIGATION_DESTINATIONS.has(destinationId) ? destinationId : "store";
+  return `${workerPublicBase(env)}/navigate?to=${encodeURIComponent(id)}`;
+}
+
+function renderMobileNavigationPage(request) {
+  const url = new URL(request.url);
+  const destinationId = String(url.searchParams.get("to") || "store").trim();
+  const destination = LINE_NAVIGATION_DESTINATIONS.get(destinationId) || LINE_NAVIGATION_DESTINATIONS.get("store");
+  const fallbackUrl = googleMapsDirectionsUrl(destination.destination);
+  return new Response(`<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>導航至${escapeHtml(destination.label)}</title>
+  <style>
+    :root{--green:#087f5b;--ink:#17211b;--muted:#607067;--line:#dce7df;--pale:#eff8f3}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f4f7f5;color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:calc(24px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom))}
+    main{width:min(100%,430px);background:#fff;border:1px solid var(--line);border-radius:8px;padding:28px 22px;text-align:center;box-shadow:0 14px 36px rgba(25,62,42,.1)}
+    .pin{width:68px;height:68px;margin:0 auto 18px;border-radius:50%;display:grid;place-items:center;background:var(--pale);font-size:32px}h1{font-size:23px;line-height:1.4;margin:0 0 8px;letter-spacing:0}.lead{margin:0;color:var(--muted);font-size:14px;line-height:1.7;font-weight:650}.status{margin:20px 0 0;padding:14px;border-radius:8px;background:var(--pale);color:#25613d;font-size:15px;font-weight:800;line-height:1.6}.actions{display:grid;gap:10px;margin-top:18px}.btn{min-height:50px;border:1px solid var(--line);border-radius:8px;background:#fff;color:#405248;font-size:16px;font-weight:850}.primary{border-color:var(--green);background:var(--green);color:#fff}.btn[hidden]{display:none}.error{background:#fff4e6;color:#9a3412}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="pin">📍</div>
+    <h1>導航至${escapeHtml(destination.label)}</h1>
+    <p class="lead">將取得手機目前位置，建立到目的地的 Google Maps 導航路線。</p>
+    <div class="status" id="status" role="status" aria-live="polite">正在取得手機精準位置...</div>
+    <div class="actions">
+      <button class="btn primary" id="retry" type="button" hidden>重新取得目前位置</button>
+      <button class="btn" id="fallback" type="button" hidden>略過定位，開啟 Google Maps</button>
+    </div>
+  </main>
+  <script>
+    const FALLBACK_URL=${JSON.stringify(fallbackUrl)};
+    const statusEl=document.getElementById("status");
+    const retry=document.getElementById("retry");
+    const fallback=document.getElementById("fallback");
+    function openMaps(origin){const target=new URL(FALLBACK_URL);if(origin)target.searchParams.set("origin",origin);location.replace(target.toString())}
+    function fail(message){statusEl.classList.add("error");statusEl.textContent=message;retry.hidden=false;fallback.hidden=false}
+    function locate(){statusEl.classList.remove("error");statusEl.textContent="正在取得手機精準位置...";retry.hidden=true;fallback.hidden=true;if(!navigator.geolocation){fail("此瀏覽器無法讀取定位，請確認 LINE 與手機定位權限。");return}navigator.geolocation.getCurrentPosition(position=>{const latitude=Number(position.coords.latitude).toFixed(6);const longitude=Number(position.coords.longitude).toFixed(6);statusEl.textContent="定位完成，正在開啟 Google Maps...";openMaps(latitude+","+longitude)},error=>{const denied=error&&error.code===1;fail(denied?"尚未取得定位權限。請允許 LINE 使用精確位置後重試。":"目前無法取得手機位置，請確認 GPS 與網路後重試。")},{enableHighAccuracy:true,timeout:12000,maximumAge:15000})}
+    retry.onclick=locate;
+    fallback.onclick=()=>openMaps("");
+    locate();
+  </script>
+</body>
+</html>`, { headers: HTML_HEADERS });
 }
 
 function buildLineBusinessHoursMessage() {
@@ -1155,8 +1210,8 @@ function buildLineJiaoxiRecommendationFlexMessage(category) {
   };
 }
 
-function buildLineParkingFlexMessage() {
-  const storeMapUrl = googleMapsDirectionsUrl(`${LINE_STORE_LOCATION.name} ${LINE_STORE_LOCATION.address}`);
+function buildLineParkingFlexMessage(env) {
+  const storeMapUrl = mobileNavigationUrl(env, "store");
   const bubbles = LINE_NEARBY_PARKING_PLACES.map((place, index) => ({
     type: "bubble",
     size: "kilo",
@@ -1203,7 +1258,7 @@ function buildLineParkingFlexMessage() {
           action: {
             type: "uri",
             label: "導航到停車場",
-            uri: googleMapsDirectionsUrl(`${place.name} 宜蘭礁溪`),
+            uri: mobileNavigationUrl(env, place.id),
           },
         },
         {
@@ -1295,7 +1350,7 @@ async function generateLineAiMenuReply(env, target, limits) {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: { maxOutputTokens: limits.maxOutputTokens },
   });
-  const responseText = formatLineAiReplyText(extractGeminiText(result.body), target.keyword);
+  const responseText = formatLineAiReplyText(extractGeminiText(result.body), target.keyword, env);
   if (!result.response.ok || !responseText) {
     const errorCode = String(result.body?.error?.status || result.body?.error?.code || `HTTP_${result.response.status}`);
     await recordLineAiUsage(env, {
@@ -1389,7 +1444,7 @@ async function generateLineAiChatDecision(env, target, limits) {
   return {
     decision: parsed.decision,
     reply: parsed.decision === "answer"
-      ? formatLineAiReplyText(parsed.reply, target.keyword).slice(0, 4500)
+      ? formatLineAiReplyText(parsed.reply, target.keyword, env).slice(0, 4500)
       : "",
   };
 }
@@ -1518,7 +1573,7 @@ async function buildLineKeywordMenuReplyDecision(env, events) {
     const isFaq = target.keyword === LINE_FAQ_MENU_KEYWORD;
     const jiaoxiRecommendationCategory = lineJiaoxiRecommendationCategory(target.keyword);
     let message;
-    if (isParkingGuide) message = buildLineParkingFlexMessage();
+    if (isParkingGuide) message = buildLineParkingFlexMessage(env);
     else if (isPoolHygieneGuide) message = await buildLinePoolHygieneFlexMessage(env);
     else if (isBusinessHours) message = buildLineBusinessHoursMessage();
     else if (isJiaoxiRecommendationMenu) message = buildLineJiaoxiRecommendationMenuMessage();
