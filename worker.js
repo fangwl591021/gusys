@@ -72,6 +72,7 @@ const LINE_AI_MEDICAL_CLAIM_REPLY = "🐟 重口味溫泉魚提供的是休閒�
 const LINE_AI_CHAT_MENU_GUIDE_PATTERN = /^(你好|您好|嗨|哈囉|hello|hi|請問|有人嗎|我要問問題|想詢問|想了解|怎麼用|如何使用|功能|選單|圖文選單|幫助|help)[！!。.？?\s]*$/i;
 const LINE_AI_CHAT_MENU_GUIDE = "您好，歡迎來到重口味溫泉魚。\n\n請使用下方圖文選單查詢：\n• 收費標準與魚種\n• 營業時間與公休\n• 導航與停車指南\n• 入池衛生須知\n• 礁溪順遊推薦\n• 常見問題（FAQ）\n\n需要人工協助時，請點選「聯絡客服」。";
 const LINE_POOL_HYGIENE_ASSET_ID = "asset_5d864d4b-66c6-45a9-89ef-933578d77a0d";
+const LINE_POOL_HYGIENE_IMAGE_PATH = "/assets/pool-hygiene-guide-v2.png";
 const LINE_POOL_HYGIENE_RULES = [
   ["進出清潔", "玩前不用先洗腳；若有沙子、泥土、乳液、藥膏或其他用品，必須先洗乾淨。離開前一定要洗腳。"],
   ["化學限制", "嚴禁防曬、防蚊等化學物入水，請先洗淨再入池。"],
@@ -1313,7 +1314,7 @@ async function buildLinePoolHygieneFlexMessage(env) {
       size: "giga",
       hero: {
         type: "image",
-        url: `${workerPublicBase(env)}/assets/pool-hygiene-guide.jpg`,
+        url: `${workerPublicBase(env)}${LINE_POOL_HYGIENE_IMAGE_PATH}`,
         size: "full",
         aspectRatio: "43:64",
         aspectMode: "fit",
