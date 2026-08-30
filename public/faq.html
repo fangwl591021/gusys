@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="description" content="重口味溫泉魚常見問題，包含票價、體驗方式、交通停車、營業時間、安全規定、團體預約與客服資訊。">
+  <link rel="canonical" href="https://gusys.fangwl591021.workers.dev/faq">
+  <link rel="icon" href="data:,">
+  <title>常見問題｜重口味溫泉魚</title>
+  <style>
+    :root{--bg:#f3f6f5;--surface:#fff;--ink:#102033;--muted:#607080;--line:#dce5e1;--green:#078653;--green-dark:#05643f;--orange:#f59e0b;--dark:#0f172a}
+    *{box-sizing:border-box}
+    html{background:var(--bg);scroll-behavior:smooth}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:0}
+    button,a,input{font:inherit;-webkit-tap-highlight-color:transparent}
+    button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid rgba(7,134,83,.28);outline-offset:2px}
+    .shell{width:100%;max-width:760px;min-height:100dvh;margin:0 auto;background:var(--bg)}
+    .hero{position:relative;display:flex;min-height:250px;align-items:flex-end;overflow:hidden;padding:max(28px,env(safe-area-inset-top)) 20px 26px;color:#fff;background:#0f172a url("https://drive.google.com/thumbnail?id=1FX7JSad9XW3f7F4cKgByQx1i32TPe6Ij&sz=w1200") center/cover no-repeat}
+    .hero::before{position:absolute;inset:0;content:"";background:linear-gradient(180deg,rgba(15,23,42,.2),rgba(15,23,42,.94))}
+    .hero-content{position:relative;z-index:1;width:100%}
+    .eyebrow{color:#fbbf24;font-size:12px;font-weight:900;letter-spacing:.16em}
+    h1{margin:8px 0 9px;font-size:34px;line-height:1.12;letter-spacing:0}
+    .hero p{max-width:580px;margin:0;color:#e2e8f0;font-size:14px;line-height:1.65}
+    .toolbar{position:sticky;z-index:20;top:0;padding:12px 14px 10px;border-bottom:1px solid var(--line);background:rgba(243,246,245,.97);backdrop-filter:blur(12px)}
+    .search{position:relative}
+    .search-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#64748b;font-size:18px;pointer-events:none}
+    .search input{width:100%;height:48px;padding:0 44px;border:1px solid #cbd8d2;border-radius:7px;background:#fff;color:var(--ink);font-size:16px}
+    .clear{position:absolute;right:8px;top:6px;display:none;width:36px;height:36px;border:0;background:transparent;color:#64748b;font-size:24px;cursor:pointer}
+    .tabs{display:flex;gap:8px;overflow-x:auto;margin:10px -14px 0;padding:0 14px 3px;scrollbar-width:none;overscroll-behavior-inline:contain}
+    .tabs::-webkit-scrollbar{display:none}
+    .tab{flex:0 0 auto;min-height:40px;padding:8px 13px;border:1px solid var(--line);border-radius:6px;background:#fff;color:#475569;font-size:13px;font-weight:800;white-space:nowrap;cursor:pointer}
+    .tab.active{border-color:var(--green);background:var(--green);color:#fff}
+    .content{padding:14px 14px 110px}
+    .summary-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 2px 14px;color:var(--muted);font-size:13px}
+    .summary-bar strong{color:var(--ink)}
+    .collapse-all{border:0;background:transparent;color:var(--green-dark);font-weight:800;cursor:pointer}
+    .section{margin:0 0 22px}
+    .section-head{display:flex;align-items:center;gap:10px;margin:0 2px 9px}
+    .section-icon{display:grid;width:34px;height:34px;place-items:center;border-radius:7px;background:#e5f5ed;font-size:17px}
+    .section h2{margin:0;font-size:18px;line-height:1.3;letter-spacing:0}
+    .section-count{margin-left:auto;color:#7b8a93;font-size:12px}
+    .faq-list{overflow:hidden;border-top:1px solid var(--line);background:var(--surface)}
+    details{border-bottom:1px solid var(--line);background:#fff}
+    summary{position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:start;min-height:62px;padding:16px 14px;cursor:pointer;list-style:none}
+    summary::-webkit-details-marker{display:none}
+    .qid{padding-top:2px;color:var(--green-dark);font-size:11px;font-weight:900}
+    .question{font-size:15px;font-weight:800;line-height:1.55}
+    .chevron{color:#718096;font-size:20px;line-height:1.2;transition:transform .18s ease}
+    details[open] .chevron{transform:rotate(45deg)}
+    .answer{margin:0;padding:0 16px 17px 49px;color:#475569;font-size:14px;line-height:1.75;white-space:pre-line}
+    mark{border-radius:2px;background:#fef3c7;color:inherit}
+    .empty{padding:42px 20px;border:1px dashed #cbd8d2;border-radius:7px;background:#fff;color:var(--muted);text-align:center;line-height:1.7}
+    .notice{margin-top:18px;padding:14px;border-left:4px solid var(--orange);background:#fff;color:#64748b;font-size:12px;line-height:1.7}
+    .quick-actions{position:fixed;z-index:30;right:0;bottom:0;left:0;padding:10px max(12px,env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));border-top:1px solid var(--line);background:rgba(255,255,255,.97);box-shadow:0 -8px 24px rgba(15,23,42,.08)}
+    .quick-inner{display:grid;max-width:732px;margin:0 auto;grid-template-columns:1fr 1fr;gap:9px}
+    .action{display:flex;min-height:48px;align-items:center;justify-content:center;gap:7px;border:1px solid var(--green);border-radius:7px;background:#fff;color:var(--green-dark);font-size:14px;font-weight:900;text-decoration:none}
+    .action.primary{background:var(--green);color:#fff}
+    [hidden]{display:none!important}
+    @media(min-width:650px){.hero{min-height:310px;padding-right:28px;padding-left:28px}.toolbar{padding-right:20px;padding-left:20px}.content{padding-right:20px;padding-left:20px}.tabs{margin-right:-20px;margin-left:-20px;padding-right:20px;padding-left:20px}.faq-list{border:1px solid var(--line);border-radius:7px}.faq-list details:last-child{border-bottom:0}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.chevron{transition:none}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div class="hero-content">
+        <div class="eyebrow">FAQ</div>
+        <h1>重口味溫泉魚<br>常見問題</h1>
+        <p>票價、魚池體驗、交通停車、營業時間與現場安全規定，都可以在這裡快速查詢。</p>
+      </div>
+    </header>
+
+    <section class="toolbar" aria-label="搜尋與分類">
+      <div class="search">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input id="searchInput" type="search" inputmode="search" autocomplete="off" placeholder="搜尋問題，例如：票價、停車、傷口" aria-label="搜尋常見問題">
+        <button class="clear" id="clearSearch" type="button" aria-label="清除搜尋">×</button>
+      </div>
+      <nav class="tabs" id="categoryTabs" aria-label="常見問題分類"></nav>
+    </section>
+
+    <section class="content">
+      <div class="summary-bar"><span id="resultCount"></span><button class="collapse-all" id="collapseAll" type="button">全部收合</button></div>
+      <div id="faqSections"></div>
+      <div class="empty" id="emptyState" hidden>找不到符合的問題。<br>可以改用其他關鍵字，或直接聯絡客服。</div>
+      <div class="notice">現場開放狀況、優惠與臨時營業調整，以 LINE 官方帳號及店家現場公告為準。身體不適、開放性傷口或特殊健康狀況者，請先停止體驗並洽現場工作人員。</div>
+    </section>
+  </main>
+
+  <nav class="quick-actions" aria-label="快速聯絡">
+    <div class="quick-inner">
+      <a class="action" href="https://www.google.com/maps/dir/?api=1&destination=%E9%87%8D%E5%8F%A3%E5%91%B3%E6%BA%AB%E6%B3%89%E9%AD%9A%20%E5%AE%9C%E8%98%AD%E7%B8%A3%E7%A4%81%E6%BA%AA%E9%84%89%E4%BB%81%E6%84%9B%E8%B7%AF23%E8%99%9F" target="_blank" rel="noopener noreferrer"><span aria-hidden="true">⌖</span>開始導航</a>
+      <a class="action primary" href="tel:0985197664"><span aria-hidden="true">☎</span>聯絡客服</a>
+    </div>
+  </nav>
+
+  <script>
+    const FAQ_SECTIONS = [
+      {id:"about",label:"體驗介紹",icon:"🐟",items:[
+        ["Q01","重口味溫泉魚是什麼？","名稱來自現場不同魚池帶來的多層次互動感受。每個人的感受會因個人敏感度而不同，可從較溫和的魚池開始體驗。"],
+        ["Q03","你們有什麼特色？","現場有多種不同魚種與不同程度的互動感受，可以從比較弱的魚池開始，再慢慢挑戰更有感的魚池。"],
+        ["Q04","第一次來可以玩嗎？","可以。第一次體驗可先從比較溫和的魚池開始，不知道怎麼選時也可以詢問現場工作人員。"],
+        ["Q05","大人可以玩嗎？","可以，大人與小朋友都可以依現場規定選擇適合自己的魚池體驗。"],
+        ["Q06","小朋友可以玩嗎？","可以。小朋友體驗時請由家長或同行成人陪同，並依現場安全規定使用。"],
+        ["Q07","適合親子一起來嗎？","可以，是適合親子一起體驗的礁溪休閒活動之一。"],
+        ["Q08","長輩可以體驗嗎？","可以，但建議依個人身體狀況自行評估，進出體驗區時也請特別留意地面與行走安全。"]
+      ]},
+      {id:"price",label:"收費入場",icon:"🎫",items:[
+        ["Q09","門票多少錢？","目前成人票為 100 元，兒童票為 80 元。"],
+        ["Q12","幾歲以下免費？","4 歲以下免費。"],
+        ["Q14","兒童票怎麼認定？","兒童票適用於 4 歲以上至國小六年級的兒童。"],
+        ["Q15","假日會加價嗎？","假日依原價收費。"],
+        ["Q16","平日跟假日價格一樣嗎？","不一樣，平日可能提供折扣，實際優惠以店家當日公告為準。"],
+        ["Q19","可以不限時嗎？","當天不限體驗時間。"],
+        ["Q20","出去之後還可以再進來嗎？","可以，當天蓋章後可重複進場。"],
+        ["Q21","有團體票嗎？","有團體安排。團體來訪請先聯絡店家確認人數、時間與方案。"],
+        ["Q24","可以用 LINE Pay 嗎？","目前沒有提供 LINE Pay。"],
+        ["Q25","可以用現金嗎？","目前僅收現金。"]
+      ]},
+      {id:"fish",label:"魚池體驗",icon:"🫧",items:[
+        ["Q26","你們有幾種魚？","目前現場共有 12 種不同互動感受。"],
+        ["Q27","每一池的魚都一樣嗎？","不一樣，不同魚池的魚種、大小及互動感受會有所不同。"],
+        ["Q28","哪一池比較不刺激？","第一次體驗或比較怕癢的客人，可以先選沒有標示編號、互動感受最溫和的魚池。"],
+        ["Q29","哪一池最有感？","每個人的敏感度不同，可依現場標示逐步嘗試；一般體驗一段時間後會逐漸適應。"],
+        ["Q30","我怕癢可以玩嗎？","可以，建議從比較溫和的魚池開始，慢慢適應。"],
+        ["Q31","魚碰腳是什麼感覺？","每個人的感受不同，常見會覺得癢癢、酥麻或有明顯接觸感。"],
+        ["Q32","會不會痛？","每個人的敏感程度不同。如果覺得不舒服，可以立即把腳移開，或改到其他比較適合自己的魚池。"],
+        ["Q33","可以每一池都玩嗎？","依現場開放狀況與使用規定，可以體驗不同魚池。"],
+        ["Q34","可以自己選魚池嗎？","可以依現場開放狀況選擇，也可以請工作人員協助推薦。"]
+      ]},
+      {id:"traffic",label:"交通停車",icon:"📍",items:[
+        ["Q35","你們在哪裡？","地址是宜蘭縣礁溪鄉仁愛路 23 號。"],
+        ["Q37","在礁溪嗎？","是的，店家位於礁溪市區，鄰近湯圍溝一帶。"],
+        ["Q38","離湯圍溝很遠嗎？","不遠，店家位於湯圍溝中間的三角窗位置，適合一起安排礁溪市區行程。"],
+        ["Q39","從礁溪火車站可以走過去嗎？","可以，從礁溪火車站步行約 10 至 15 分鐘。"],
+        ["Q40","開車怎麼導航？","可直接在導航搜尋「重口味溫泉魚」，或輸入「宜蘭縣礁溪鄉仁愛路 23 號」。"],
+        ["Q41","Google 地圖要搜尋什麼？","搜尋「重口味溫泉魚」即可。"],
+        ["Q42","附近有停車場嗎？","附近有停車空間，建議依現場指示或使用導航尋找鄰近停車場。"],
+        ["Q43","店家有自己的停車場嗎？","目前沒有店家專用停車場。"],
+        ["Q44","汽車停哪裡比較方便？","建議停在附近停車場，再步行前往店家。"],
+        ["Q45","機車可以停哪裡？","機車可停放於店面前方，請勿妨礙行人與出入口。"],
+        ["Q46","遊覽車可以停嗎？","遊覽車或大型團體請事先聯絡店家，確認停車及上下車方式。"]
+      ]},
+      {id:"hours",label:"營業衛生",icon:"🕘",items:[
+        ["Q48","營業時間是幾點？","平日 09:00 至 22:00；假日 09:00 至 23:00。"],
+        ["Q49","今天有營業嗎？","一般依正常營業時間營業。如遇臨時調整，請以 LINE 官方帳號或店家公告為準。"],
+        ["Q53","過年有營業嗎？","全年無休；特殊期間如有調整，以店家最新公告為準。"],
+        ["Q54","颱風天有營業嗎？","特殊天候可能依安全狀況調整營業時間，請以 LINE 官方帳號或店家公告為準。"],
+        ["Q55","下雨天可以來嗎？","可以，仍請留意交通與地面濕滑狀況。"],
+        ["Q56","體驗前需要洗腳嗎？","請依現場清潔指示使用洗腳區；若腳上有乳液、藥膏或其他用品，請先清潔並詢問工作人員。"],
+        ["Q57","要脫鞋襪子嗎？","需要，請依現場指定位置脫鞋襪子後再進行體驗。"],
+        ["Q59","腳有傷口可以玩嗎？","開放性、較大或持續滲血的傷口不得入池。一般結痂、脫皮、蚊蟲咬傷或貼有敷料的部位，也請先由現場工作人員確認。糖尿病、洗腎、嚴重皮膚病或其他特殊健康狀況者請勿入池。"],
+        ["Q61","擦乳液可以直接下水嗎？","請先依現場清潔規定將雙腳清潔後再入池。"],
+        ["Q62","腳上有藥膏或其他用品可以入池嗎？","請先向現場工作人員確認，並依店內清潔規定處理後再體驗。"],
+        ["Q64","有提供洗腳的地方嗎？","有提供洗腳區。"],
+        ["Q66","毛巾要另外付費嗎？","每位來客贈送毛巾 1 條，不需另外付費。"],
+        ["Q67","可以自己帶毛巾嗎？","可以自行準備個人毛巾。"]
+      ]},
+      {id:"safety",label:"安全規定",icon:"🛡️",items:[
+        ["Q68","場地會不會濕滑？","魚池周邊可能會有水漬，請放慢腳步並留意地面狀況。"],
+        ["Q69","場內可以跑嗎？","不可以。為避免滑倒或碰撞，體驗區請勿奔跑、追逐。"],
+        ["Q70","小朋友可以自己跑來跑去嗎？","不建議，兒童請由家長或同行成人陪同並注意安全。"],
+        ["Q71","小朋友需要大人陪同嗎？","需要，兒童體驗過程請由家長或成人陪同。"],
+        ["Q72","可以推朋友下水嗎？","不可以。體驗區禁止推擠、拉扯或其他可能造成跌倒的危險行為。"],
+        ["Q74","可以在魚池裡走動或站立嗎？","不可以，請勿站立或走入魚池，以免發生危險或驚擾魚隻。"],
+        ["Q75","可以跨過魚池嗎？","不建議，這是危險動作。請依現場動線行走，避免跨越魚池或設備。"],
+        ["Q76","可以抓魚嗎？","不可以，請勿抓取、追趕或將魚隻拿出水面，以免造成魚隻受傷或死亡。"],
+        ["Q77","可以摸魚嗎？","請依正常體驗方式與魚隻互動，不要刻意抓取或拍打魚隻。"],
+        ["Q78","可以餵魚嗎？","絕對不可以自行餵食，以免影響魚隻健康與正常互動。"],
+        ["Q79","可以丟東西進魚池嗎？","絕對不可以。請勿將食物、飲料、垃圾、玩具或其他物品放入魚池。"],
+        ["Q80","東西掉進魚池怎麼辦？","請不要自行進入魚池撿取，立即通知現場工作人員協助處理。"],
+        ["Q81","手機可以帶到魚池旁嗎？","可以依現場規定使用，但請自行妥善保管，避免掉落或遺失。"],
+        ["Q82","可以拍照嗎？","可以，但請注意自身安全，也避免影響其他客人的體驗。"],
+        ["Q83","可以拍影片嗎？","可以，但請尊重其他客人的隱私，避免未經同意拍攝他人。"],
+        ["Q84","飲料可以放池邊嗎？","不建議放在魚池邊緣，以免打翻、掉入水中或造成地面濕滑。"],
+        ["Q85","可以在體驗區吃東西嗎？","請在現場指定區域飲食，並避免任何食物掉入魚池。"],
+        ["Q86","鞋子要放哪裡？","請放在現場指定鞋區，勿放置在走道，以免形成通行障礙。"],
+        ["Q87","包包放哪裡？","請放置於店內指定位置，貴重物品請自行妥善保管。"],
+        ["Q88","身體突然不舒服怎麼辦？","請立即停止體驗，到安全位置休息，並告知現場工作人員。"],
+        ["Q89","如果滑倒怎麼辦？","請立即通知現場工作人員協助處理。"],
+        ["Q90","看到地上很多水怎麼辦？","請先避開濕滑區域並通知工作人員處理。"],
+        ["Q91","設備好像壞掉怎麼辦？","請不要自行操作或處理，立即告知工作人員。"]
+      ]},
+      {id:"other",label:"寵物其他",icon:"🧳",items:[
+        ["Q92","可以帶寵物嗎？","可以，請依現場規定妥善管理。"],
+        ["Q94","寵物可以靠近魚池嗎？","請依現場規定，並由飼主妥善管理寵物，避免影響其他客人與體驗區。"],
+        ["Q95","寵物需要牽繩嗎？","需要，請全程使用牽繩或合適的寵物提具。"],
+        ["Q96","可以帶嬰兒車嗎？","可以，請依現場動線放置及通行。"],
+        ["Q97","輪椅方便進入嗎？","可以進入，但部分動線需特別留意，建議到場後請工作人員協助。"],
+        ["Q98","可以帶行李箱嗎？","可以，但請依現場工作人員指示放置。"],
+        ["Q99","可以帶外食嗎？","可以，請在指定區域食用，並避免食物掉入魚池。"],
+        ["Q100","有集點或點數服務嗎？","目前重口味溫泉魚沒有提供集點或點數服務。若有其他優惠活動，請以 LINE 官方帳號最新公告為準。"]
+      ]},
+      {id:"service",label:"團體客服",icon:"☎️",items:[
+        ["Q114","需要預約嗎？","一般入場目前不需要預約，可於營業時間直接到店。"],
+        ["Q118","學校或公司團體可以來嗎？","可以。40 人以上團體需要提前預約，請先與店家聯絡確認人數、時間及相關安排。"],
+        ["Q119","可以包場嗎？","可以。包場人數需超過 40 人；低於 120 人不提供折扣，包場時間以 1 小時內為原則。請事先聯絡店家確認。"],
+        ["Q120","店家電話多少？","客服電話是 0985-197-664。"],
+        ["Q121","可以用 LINE 問問題嗎？","可以，歡迎直接透過 LINE 官方帳號留言詢問。"],
+        ["Q122","東西忘在店裡怎麼辦？","請盡快透過電話或 LINE 聯絡店家，提供遺失物品特徵及大約到店時間。確認尋獲後可協助寄回，相關費用與方式請洽客服。"],
+        ["Q123","我要反映問題怎麼辦？","可以直接透過 LINE 官方帳號留言，或聯絡店家工作人員協助處理。"],
+        ["Q124","想異業合作要找誰？","合作需求可透過 LINE 官方帳號或電話留下聯絡資料，由店家協助轉達。"]
+      ]},
+      {id:"nearby",label:"礁溪順遊",icon:"🗺️",items:[
+        ["Q125","玩完附近還可以去哪？","店家位於礁溪市區、鄰近湯圍溝，可搭配礁溪市區散步、美食及其他景點安排。"],
+        ["Q126","附近有景點嗎？","附近有湯圍溝溫泉公園及礁溪市區景點，可依當天行程安排。"],
+        ["Q127","可以跟湯圍溝排在一起嗎？","可以，距離不遠，很適合安排在同一段礁溪行程。"],
+        ["Q128","附近有什麼好吃的？","礁溪市區有許多餐廳、小吃與伴手禮店，可從 LINE 圖文選單的「礁溪順遊推薦」查看食、宿、遊、購、行資訊。"],
+        ["Q129","下雨天附近還有什麼可以玩？","礁溪市區有不少室內或有遮蔽的休閒選擇，可以搭配溫泉魚體驗安排雨天行程。"],
+        ["Q130","礁溪半日遊怎麼排？","可以安排重口味溫泉魚、湯圍溝、市區美食及其他鄰近景點，形成輕鬆的半日行程。"]
+      ]}
+    ];
+
+    const state={category:"all",query:""};
+    const tabs=document.getElementById("categoryTabs");
+    const sectionsRoot=document.getElementById("faqSections");
+    const searchInput=document.getElementById("searchInput");
+    const clearSearch=document.getElementById("clearSearch");
+    const resultCount=document.getElementById("resultCount");
+    const emptyState=document.getElementById("emptyState");
+
+    function normalize(value){return String(value||"").trim().toLocaleLowerCase("zh-Hant")}
+    function make(tag,className,text){const node=document.createElement(tag);if(className)node.className=className;if(text!=null)node.textContent=text;return node}
+    function renderTabs(){
+      tabs.replaceChildren();
+      [{id:"all",label:"全部"},...FAQ_SECTIONS.map(section=>({id:section.id,label:section.label}))].forEach(item=>{
+        const button=make("button","tab"+(state.category===item.id?" active":""),item.label);
+        button.type="button";
+        button.setAttribute("aria-pressed",state.category===item.id?"true":"false");
+        button.addEventListener("click",()=>{state.category=item.id;render()});
+        tabs.append(button);
+      });
+    }
+    function matches(item){
+      if(!state.query)return true;
+      return normalize(item.join(" ")).includes(state.query);
+    }
+    function render(){
+      renderTabs();
+      sectionsRoot.replaceChildren();
+      let total=0;
+      FAQ_SECTIONS.forEach(section=>{
+        if(state.category!=="all"&&state.category!==section.id)return;
+        const items=section.items.filter(matches);
+        if(!items.length)return;
+        total+=items.length;
+        const wrap=make("section","section");
+        const head=make("div","section-head");
+        head.append(make("span","section-icon",section.icon),make("h2","",section.label),make("span","section-count",`${items.length} 題`));
+        const list=make("div","faq-list");
+        items.forEach(item=>{
+          const details=document.createElement("details");
+          const summary=document.createElement("summary");
+          summary.append(make("span","qid",item[0]),make("span","question",item[1]),make("span","chevron","＋"));
+          details.append(summary,make("p","answer",item[2]));
+          list.append(details);
+        });
+        wrap.append(head,list);
+        sectionsRoot.append(wrap);
+      });
+      resultCount.replaceChildren(document.createTextNode("顯示 "),make("strong","",String(total)),document.createTextNode(" 個問題"));
+      emptyState.hidden=total!==0;
+      clearSearch.style.display=state.query?"block":"none";
+    }
+    searchInput.addEventListener("input",event=>{state.query=normalize(event.target.value);render()});
+    clearSearch.addEventListener("click",()=>{searchInput.value="";state.query="";searchInput.focus();render()});
+    document.getElementById("collapseAll").addEventListener("click",()=>document.querySelectorAll("details[open]").forEach(item=>item.open=false));
+    render();
+  </script>
+</body>
+</html>
