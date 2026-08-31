@@ -42,6 +42,28 @@ const LINE_CUSTOMER_SERVICE_PHONE = "0985197664";
 const LINE_FAQ_MENU_KEYWORD = "常見問題(FAQ)";
 const LINE_FAQ_PAGE_URL = "https://gusys.fangwl591021.workers.dev/faq";
 const LINE_MEMBER_SHARE_MENU_KEYWORDS = new Set(["分享好友拿優惠", "會員分享", "分享好友"]);
+const LINE_MENU_ANALYTICS_BUTTONS = [
+  "最新活動",
+  "收費標準與魚種",
+  "導航與停車指南",
+  "營業時間與公休",
+  "入池衛生須知",
+  "數位集點卡",
+  "礁溪順遊推薦",
+  "礁溪推薦｜食",
+  "礁溪推薦｜宿",
+  "礁溪推薦｜遊",
+  "礁溪推薦｜購",
+  "礁溪推薦｜行",
+  "常見問題(FAQ)",
+  "優選商城",
+  "聯絡客服",
+  "分享好友拿優惠",
+];
+const LINE_MENU_ANALYTICS_ALIASES = new Map([
+  ["會員分享", "分享好友拿優惠"],
+  ["分享好友", "分享好友拿優惠"],
+]);
 const LINE_KEYWORD_MENU_REPLIES = new Map([
   ["最新活動", "📌 最新活動\n\n目前活動資訊以現場與 LINE 官方帳號公告為準。\n\n• 一般散客無須預約，營業時間內直接到店即可\n• 當日購票不限時間，蓋章後可重複進場\n\n如需確認當日活動，請點選「聯絡客服」。"],
   ["收費標準與魚種", "🎫 收費標準與魚種\n\n• 成人票 100 元\n• 兒童票 80 元（4 歲以下免費）\n• 當天不限時間，蓋章可重複進場\n• 現場共有 12 種不同互動感受\n• 目前僅收現金\n\n平日優惠與團體方案請以現場公告為準。"],
@@ -181,6 +203,7 @@ export default {
       if (url.pathname === "/api/referrals/bind" && (request.method === "POST" || request.method === "GET")) return bindMemberReferral(request, env);
       if (url.pathname.startsWith("/api/admin/webhook") && request.method === "GET") return listAdminWebhookEvents(request, env);
       if (url.pathname === "/api/admin/summary" && request.method === "GET") return adminSummary(request, env);
+      if (url.pathname === "/api/admin/menu-click-report" && request.method === "GET") return menuClickReport(request, env);
       if (url.pathname === "/api/admin/audit-logs" && request.method === "GET") return listAuditLogs(request, env);
       if (url.pathname === "/api/admin/customers" && request.method === "GET") return listAdminCustomers(request, env);
       if (url.pathname === "/api/admin/customers" && request.method === "PATCH") return updateAdminCustomer(request, env);
@@ -1982,6 +2005,136 @@ async function adminSummary(request, env) {
   return json({ ok: true, data: { sales, customers, products, messages, webhooks, highRisk, latestMother, latestMessage } });
 }
 
+function analyticsUidList(value) {
+  return [...new Set(String(value || "")
+    .split(/[,，;；\s]+/)
+    .map(item => item.trim())
+    .filter(item => /^U[0-9A-Za-z_-]{8,}$/.test(item)))];
+}
+
+async function menuClickReport(request, env) {
+  requireAdmin(request, env);
+  requireDb(env);
+  const url = new URL(request.url);
+  const requestedDays = Number.parseInt(url.searchParams.get("days") || "30", 10);
+  const days = [0, 7, 30, 90, 365].includes(requestedDays) ? requestedDays : 30;
+  const fromIso = days > 0 ? new Date(Date.now() - days * 86400000).toISOString() : "";
+  const sourceButtons = [...LINE_MENU_ANALYTICS_BUTTONS, ...LINE_MENU_ANALYTICS_ALIASES.keys()];
+  const placeholders = sourceButtons.map(() => "?").join(",");
+  const timeFilter = fromIso
+    ? "AND datetime(COALESCE(NULLIF(created_at, ''), inserted_at)) >= datetime(?)"
+    : "";
+  const clickStatement = env.DB.prepare(`
+    SELECT message_text AS button, sender_id AS lineUserId, COUNT(*) AS clicks,
+           MIN(COALESCE(NULLIF(created_at, ''), inserted_at)) AS firstClickedAt,
+           MAX(COALESCE(NULLIF(created_at, ''), inserted_at)) AS lastClickedAt
+    FROM line_messages
+    WHERE sender_role = 'user'
+      AND message_text IN (${placeholders})
+      ${timeFilter}
+    GROUP BY message_text, sender_id
+  `);
+  const [clickResult, staffResult, settings] = await Promise.all([
+    clickStatement.bind(...sourceButtons, ...(fromIso ? [fromIso] : [])).all(),
+    env.DB.prepare(`
+      SELECT line_user_id AS lineUserId FROM sales_reps
+      WHERE status = 'active' AND line_user_id <> ''
+      UNION
+      SELECT line_user_id AS lineUserId FROM customers
+      WHERE status = 'active' AND customer_type = 'sales' AND line_user_id <> ''
+    `).all(),
+    getPublicHookteaSettings(env),
+  ]);
+
+  const managerUids = new Set(analyticsUidList(settings.crm_login_uids));
+  const operatorUids = new Set(analyticsUidList(settings.analytics_excluded_uids));
+  const staffUids = new Set((staffResult.results || []).map(row => String(row.lineUserId || "").trim()).filter(Boolean));
+  const testUids = new Set(analyticsUidList(env.BROADCAST_TEST_UID || ""));
+  const excludedReason = lineUserId => {
+    if (!lineUserId) return "unattributed";
+    if (operatorUids.has(lineUserId)) return "operator";
+    if (managerUids.has(lineUserId)) return "manager";
+    if (testUids.has(lineUserId)) return "test";
+    if (staffUids.has(lineUserId)) return "staff";
+    return "";
+  };
+
+  const buttonStats = new Map(LINE_MENU_ANALYTICS_BUTTONS.map(button => [button, {
+    button,
+    clicks: 0,
+    users: new Set(),
+    firstClickedAt: "",
+    lastClickedAt: "",
+  }]));
+  const validUsers = new Set();
+  const excludedUsers = new Set();
+  const excludedByReason = { manager: 0, operator: 0, staff: 0, test: 0, unattributed: 0 };
+  let observedClicks = 0;
+  let validClicks = 0;
+  let excludedClicks = 0;
+  for (const row of clickResult.results || []) {
+    const clicks = Math.max(Number(row.clicks || 0), 0);
+    const lineUserId = String(row.lineUserId || "").trim();
+    const canonicalButton = LINE_MENU_ANALYTICS_ALIASES.get(String(row.button || "")) || String(row.button || "");
+    observedClicks += clicks;
+    const reason = excludedReason(lineUserId);
+    if (reason) {
+      excludedClicks += clicks;
+      excludedByReason[reason] += clicks;
+      if (lineUserId) excludedUsers.add(lineUserId);
+      continue;
+    }
+    const stat = buttonStats.get(canonicalButton);
+    if (!stat) continue;
+    validClicks += clicks;
+    if (lineUserId) {
+      stat.users.add(lineUserId);
+      validUsers.add(lineUserId);
+    }
+    const firstClickedAt = String(row.firstClickedAt || "");
+    const lastClickedAt = String(row.lastClickedAt || "");
+    if (firstClickedAt && (!stat.firstClickedAt || firstClickedAt < stat.firstClickedAt)) stat.firstClickedAt = firstClickedAt;
+    if (lastClickedAt && lastClickedAt > stat.lastClickedAt) stat.lastClickedAt = lastClickedAt;
+    stat.clicks += clicks;
+  }
+
+  const buttons = [...buttonStats.values()]
+    .map(stat => ({
+      button: stat.button,
+      clicks: stat.clicks,
+      uniqueUsers: stat.users.size,
+      clickSharePct: validClicks ? Number((stat.clicks * 100 / validClicks).toFixed(1)) : 0,
+      userReachPct: validUsers.size ? Number((stat.users.size * 100 / validUsers.size).toFixed(1)) : 0,
+      firstClickedAt: stat.firstClickedAt,
+      lastClickedAt: stat.lastClickedAt,
+    }))
+    .sort((a, b) => b.clicks - a.clicks || a.button.localeCompare(b.button, "zh-Hant"));
+
+  return json({
+    ok: true,
+    data: {
+      generatedAt: new Date().toISOString(),
+      period: { days, from: fromIso, label: days ? `最近 ${days} 天` : "全部期間" },
+      totals: {
+        observedClicks,
+        validClicks,
+        validUsers: validUsers.size,
+        excludedClicks,
+        excludedUsers: excludedUsers.size,
+      },
+      exclusions: {
+        configuredManagers: managerUids.size,
+        configuredOperators: operatorUids.size,
+        detectedStaff: staffUids.size,
+        configuredTestUsers: testUids.size,
+        clicksByReason: excludedByReason,
+      },
+      buttons,
+      methodology: "以 LINE 圖文選單與 Quick Reply 傳入的指定文字訊息統計；排除管理員、設定的操作人員、業務工作人員與測試 UID。LINE 未提供選單曝光數，因此 clickSharePct 是有效點擊占比，不是曝光 CTR。",
+    },
+  });
+}
+
 async function listAdminCustomers(request, env) {
   requireAdmin(request, env);
   requireDb(env);
@@ -2056,6 +2209,7 @@ function defaultHookteaSettings(env) {
     crm_liff_id: String(env.CRM_LIFF_ID || env.ADMIN_LIFF_ID || ""),
     crm_line_login_enabled: "true",
     crm_login_uids: String(env.CRM_LOGIN_UIDS || ""),
+    analytics_excluded_uids: String(env.ANALYTICS_EXCLUDED_UIDS || ""),
     low_risk_wasabi_read_enabled: "false",
     high_risk_wasabi_read_enabled: "false",
     reward_register: "10",
@@ -7322,9 +7476,10 @@ function renderHookteaAdminPage(env) {
   </style>
 </head>
 <body>
-  <aside class="sidebar"><div class="sidebar-brand"><div><div class="brand-title">Gusys 管理站</div><div class="brand-subtitle">HookTea 架構 / 經銷商 OA</div></div><button class="sidebar-toggle" id="sidebarToggle" title="收合選單">☰</button></div><nav class="nav" id="nav"><div class="nav-group-header">營運中心</div><button class="nav-item nav-active" data-view="dashboard" title="營運統計"><span class="nav-icon">◔</span><span class="nav-label">營運統計</span></button><button class="nav-item" data-view="customers" title="客戶 CRM"><span class="nav-icon">👥</span><span class="nav-label">客戶 CRM</span></button><button class="nav-item" data-view="inventory" title="商城商品"><span class="nav-icon">▣</span><span class="nav-label">商城商品</span></button><button class="nav-item" data-view="orders" title="訂單維護"><span class="nav-icon">▤</span><span class="nav-label">訂單維護</span></button><button class="nav-item" data-view="points" title="點數總表"><span class="nav-icon">◎</span><span class="nav-label">點數總表</span></button><div class="nav-group-header">經銷商中心</div><button class="nav-item" data-view="sales" title="業務 QR"><span class="nav-icon">▦</span><span class="nav-label">業務 QR</span></button><button class="nav-item" data-view="reports" title="業績報表"><span class="nav-icon">▥</span><span class="nav-label">業績報表</span></button><div class="nav-group-header">營運工具</div><button class="nav-item" data-view="messages" title="LINE 訊息"><span class="nav-icon">💬</span><span class="nav-label">LINE 訊息</span></button><button class="nav-item" data-view="ai" title="AI 後台監控"><span class="nav-icon">◉</span><span class="nav-label">AI 後台監控</span></button><button class="nav-item" data-view="paid_broadcast" title="付費推播"><span class="nav-icon">▸</span><span class="nav-label">付費推播</span></button><button class="nav-item" data-view="flex_rules" title="機器人與專區卡片"><span class="nav-icon">▧</span><span class="nav-label">機器人與專區卡片</span></button><button class="nav-item" data-view="richmenu" title="圖文選單"><span class="nav-icon">▩</span><span class="nav-label">圖文選單</span></button><button class="nav-item" data-view="media" title="影音專區"><span class="nav-icon">▶</span><span class="nav-label">影音專區</span></button><button class="nav-item" data-view="webhooks" title="雙 Webhook"><span class="nav-icon">⛓</span><span class="nav-label">雙 Webhook</span></button><button class="nav-item" data-view="audit" title="操作紀錄"><span class="nav-icon">◷</span><span class="nav-label">操作紀錄</span></button><button class="nav-item" data-view="shop_modules" title="商城模組"><span class="nav-icon">▨</span><span class="nav-label">商城模組</span></button><button class="nav-item" data-view="settings" title="系統設定"><span class="nav-icon">⚙</span><span class="nav-label">系統設定</span></button></nav></aside>
+  <aside class="sidebar"><div class="sidebar-brand"><div><div class="brand-title">Gusys 管理站</div><div class="brand-subtitle">重口味溫泉魚 / LINE OA</div></div><button class="sidebar-toggle" id="sidebarToggle" title="收合選單">☰</button></div><nav class="nav" id="nav"><div class="nav-group-header">營運中心</div><button class="nav-item nav-active" data-view="dashboard" title="營運統計"><span class="nav-icon">◔</span><span class="nav-label">營運統計</span></button><button class="nav-item" data-view="analytics" title="按鈕分析"><span class="nav-icon">▥</span><span class="nav-label">按鈕分析</span></button><button class="nav-item" data-view="customers" title="客戶 CRM"><span class="nav-icon">👥</span><span class="nav-label">客戶 CRM</span></button><button class="nav-item" data-view="inventory" title="商城商品"><span class="nav-icon">▣</span><span class="nav-label">商城商品</span></button><button class="nav-item" data-view="orders" title="訂單維護"><span class="nav-icon">▤</span><span class="nav-label">訂單維護</span></button><button class="nav-item" data-view="points" title="點數總表"><span class="nav-icon">◎</span><span class="nav-label">點數總表</span></button><div class="nav-group-header">經銷商中心</div><button class="nav-item" data-view="sales" title="業務 QR"><span class="nav-icon">▦</span><span class="nav-label">業務 QR</span></button><button class="nav-item" data-view="reports" title="業績報表"><span class="nav-icon">▥</span><span class="nav-label">業績報表</span></button><div class="nav-group-header">營運工具</div><button class="nav-item" data-view="messages" title="LINE 訊息"><span class="nav-icon">💬</span><span class="nav-label">LINE 訊息</span></button><button class="nav-item" data-view="ai" title="AI 後台監控"><span class="nav-icon">◉</span><span class="nav-label">AI 後台監控</span></button><button class="nav-item" data-view="paid_broadcast" title="付費推播"><span class="nav-icon">▸</span><span class="nav-label">付費推播</span></button><button class="nav-item" data-view="flex_rules" title="機器人與專區卡片"><span class="nav-icon">▧</span><span class="nav-label">機器人與專區卡片</span></button><button class="nav-item" data-view="richmenu" title="圖文選單"><span class="nav-icon">▩</span><span class="nav-label">圖文選單</span></button><button class="nav-item" data-view="media" title="影音專區"><span class="nav-icon">▶</span><span class="nav-label">影音專區</span></button><button class="nav-item" data-view="webhooks" title="雙 Webhook"><span class="nav-icon">⛓</span><span class="nav-label">雙 Webhook</span></button><button class="nav-item" data-view="audit" title="操作紀錄"><span class="nav-icon">◷</span><span class="nav-label">操作紀錄</span></button><button class="nav-item" data-view="shop_modules" title="商城模組"><span class="nav-icon">▨</span><span class="nav-label">商城模組</span></button><button class="nav-item" data-view="settings" title="系統設定"><span class="nav-icon">⚙</span><span class="nav-label">系統設定</span></button></nav></aside>
   <main class="main-content"><header class="page-header"><div><div class="page-title" id="pageTitle">營運統計</div><div class="page-subtitle" id="pageSubtitle">以 HookTea 後台結構管理 CRM、商城、點數與經銷商歸屬</div></div><div class="header-actions"><span class="status-badge" id="systemStatus">連線中</span><input id="adminToken" type="password" placeholder="Admin token"><button class="btn-outline" id="saveToken">儲存</button><button class="btn-green-main" id="refreshAll">更新</button></div></header><div class="content">
     <section class="view active" id="view-dashboard"><div class="stats-grid" id="metrics"></div><section class="panel"><div class="panel-header"><div class="section-title">營運摘要</div><span class="muted" id="lastRefresh"></span></div><div class="panel-body"><div class="ops-list" id="opsSummary"></div></div></section><section class="panel"><div class="panel-header"><div class="section-title">最近 LINE 訊息</div><button class="btn-outline btn-small" data-jump="messages">查看全部</button></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>時間</th><th>用戶</th><th>內容</th><th>Thread</th></tr></thead><tbody id="dashboardMessages"></tbody></table></div></section></section>
+    <section class="view" id="view-analytics"><div class="stats-grid" id="menuClickMetrics"></div><section class="panel"><div class="panel-header"><div><div class="section-title">圖文選單按鈕分析</div><div class="muted" id="menuClickMethod">統計 LINE 圖文選單與 Quick Reply 的有效點擊</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select id="menuClickPeriod" class="btn-outline"><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 365 天</option><option value="0">全部期間</option></select><button class="btn-outline btn-small" id="reloadMenuClicks">重新統計</button></div></div><div class="panel-body"><div class="settings-note" style="margin-bottom:14px">LINE 未提供圖文選單曝光數，因此「點擊占比」是各按鈕占全部有效點擊的比例；「使用者觸及率」是點過該按鈕的有效使用者占比，兩者都不是曝光 CTR。</div><div class="ops-list" id="menuClickExclusions"></div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>按鈕</th><th>有效點擊</th><th>使用者</th><th>點擊占比</th><th>使用者觸及率</th><th>最後點擊</th></tr></thead><tbody id="menuClickRows"></tbody></table></div><div class="panel-body" style="border-top:1px solid #e2e8f0"><label><span class="input-label">額外排除的操作人員 LINE UID</span><textarea data-setting="analytics_excluded_uids" id="analyticsExcludedUids" class="input-field mono" placeholder="每行或逗號分隔 LINE UID"></textarea><div class="settings-note">總部管理名單、業務／工作人員與測試推播 UID 會自動排除；此欄只需補上其他會操作測試的帳號。</div></label><div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px"><span class="muted" id="analyticsExclusionStatus"></span><button class="btn-green-main btn-small" id="saveAnalyticsExclusions">儲存排除名單</button></div></div></section></section>
     <section class="view" id="view-sales"><section class="panel"><div class="panel-header"><div class="section-title">新增業務與專屬 QR</div><span class="muted" id="salesStatus"></span></div><div class="panel-body"><div class="form-grid"><input id="salesName" placeholder="業務姓名"><input id="salesPhone" placeholder="電話"><input id="salesLine" placeholder="LINE User ID"><input id="salesCode" placeholder="業務代碼，可空白"></div><button class="btn-green-main" id="createSales">建立業務 QR</button></div></section><section class="panel"><div class="panel-header"><div class="section-title">業務清單</div></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>業務</th><th>代碼</th><th>QR</th><th>邀請連結</th><th>狀態</th></tr></thead><tbody id="salesRows"></tbody></table></div></section></section>
     <section class="view" id="view-customers"><section class="panel"><div class="panel-header"><div class="section-title">客戶 CRM</div></div><div class="crm-toolbar"><input id="customerSearch" class="crm-search" placeholder="搜尋姓名、電話、ID..."><button class="btn-outline">隱藏名單</button><button class="btn-outline" id="syncProfiles">重新同步 LINE 資料</button><button class="btn-green-main">會員 Excel 下載</button><span class="muted" id="syncProfileStatus"></span></div><div class="admin-table-container"><table class="admin-table"><thead><tr><th>姓名</th><th>LINE UID</th><th>目前等級</th><th>註冊日期</th><th>操作</th></tr></thead><tbody id="customerRows"></tbody></table></div></section></section>
     <section class="view" id="view-inventory">
@@ -7424,7 +7579,7 @@ function renderHookteaAdminPage(env) {
 </div><div class="admin-toast" id="adminToast" role="status" aria-live="polite"></div><div class="login-cover" id="loginCover"><div class="login-box"><div class="login-title">需要 Admin token</div><div class="muted">請輸入 Worker 環境變數 ADMIN_TOKEN。</div><input id="loginToken" type="password" placeholder="Admin token"><button class="btn-green-main" id="loginSubmit">進入後台</button></div></div>
   <script>
     const publicUrl = ${JSON.stringify(publicUrl)}; const motherUrl = ${JSON.stringify(motherUrl)};
-    const titles = {dashboard:["營運統計","即時掌握業務、客戶、商品、LINE 訊息與母站轉送"],sales:["業務 QR","建立業務專屬 QR，作為日後業績歸屬依據"],customers:["客戶 CRM","所有加入官方帳號者自動建檔，並追蹤互動與業務歸屬"],inventory:["商城商品","管理商品、售價、成本與安全庫存"],reports:["業績報表","每月業務績效與毛利彙整"],orders:["訂單維護","HookTea 同款訂單查詢、付款、物流與狀態維護"],points:["點數總表","對接母站點數 API，集中查詢會員點數紀錄"],messages:["LINE 訊息","查詢 LINE OA 對話紀錄"],ai:["AI 後台監控","追蹤高風險訊息、分類與建議動作"],webhooks:["雙 Webhook","查看母站轉送狀態，不顯示整段 HTML 原始碼"],richmenu:["圖文選單","規劃 LINE 圖文選單與 LIFF 入口"],media:["影音專區","管理媒體牆的店家自有影音內容"],audit:["操作紀錄","記錄後台操作與 webhook 重要事件"],shop_modules:["商城模組","集中管理 HookTea 前台商城模組"],paid_broadcast:["付費推播","依會員標籤與基本資料分群，送出 LINE 訊息"],flex_rules:["機器人與專區卡片","建立自動回覆模組檔案，供推播或圖文選單選用"],settings:["系統參數設定","紅包獎勵、LIFF、金流、WordPress 點數與圖文選單連結"]};
+    const titles = {dashboard:["營運統計","即時掌握業務、客戶、商品、LINE 訊息與母站轉送"],analytics:["按鈕分析","排除管理員與操作人員，分析圖文選單的有效點擊"],sales:["業務 QR","建立業務專屬 QR，作為日後業績歸屬依據"],customers:["客戶 CRM","所有加入官方帳號者自動建檔，並追蹤互動與業務歸屬"],inventory:["商城商品","管理商品、售價、成本與安全庫存"],reports:["業績報表","每月業務績效與毛利彙整"],orders:["訂單維護","管理訂單查詢、付款、物流與狀態"],points:["點數總表","對接母站點數 API，集中查詢會員點數紀錄"],messages:["LINE 訊息","查詢 LINE OA 對話紀錄"],ai:["AI 後台監控","追蹤高風險訊息、分類與建議動作"],webhooks:["雙 Webhook","查看母站轉送狀態，不顯示整段 HTML 原始碼"],richmenu:["圖文選單","規劃 LINE 圖文選單與 LIFF 入口"],media:["影音專區","管理媒體牆的店家自有影音內容"],audit:["操作紀錄","記錄後台操作與 webhook 重要事件"],shop_modules:["商城模組","集中管理前台商城模組"],paid_broadcast:["付費推播","依會員標籤與基本資料分群，送出 LINE 訊息"],flex_rules:["機器人與專區卡片","建立自動回覆模組檔案，供推播或圖文選單選用"],settings:["系統參數設定","紅包獎勵、LIFF、金流、WordPress 點數與圖文選單連結"]};
     let adminToken = localStorage.getItem("gusys_admin_token") || ""; let adminCustomers = []; let adminProducts = []; let adminOrders = []; let adminMediaVideos = []; let activeOrder = null; let broadcastData = {tags:[],campaigns:[],members:[],modules:[]}; let replyRules = []; let activeReplyRule = null; let activeCustomer = null; let activePointCustomer = null; const pointBalanceCache = {}; let richMenus = []; let activeRichMenu = null; let hookteaSettings = null; let smartMonitorData = {threads:[],messages:[],insights:[],selected:null}; let aiKnowledgeDocuments = []; let activeSmartThreadId = ""; let activeSmartRisk = "ALL"; const qs = s => document.querySelector(s); const qsa = s => Array.from(document.querySelectorAll(s));
     const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); const money = v => new Intl.NumberFormat("zh-TW").format(Number(v || 0)); const on = (sel, event, fn) => { const el = qs(sel); if(el) el.addEventListener(event, fn); return el; };
     qs("#adminToken").value = adminToken; function headers(){ return adminToken ? {"x-admin-token":adminToken} : {}; } function badge(text,tone){ return '<span class="status-badge '+(tone||"")+'">'+esc(text)+'</span>'; }
@@ -7440,6 +7595,10 @@ function renderHookteaAdminPage(env) {
     on("#saveGemini", "click", saveGeminiProvider); on("#testGemini", "click", testGeminiProvider); on("#clearGemini", "click", clearGeminiProvider);
     function showAdminToast(message,type="success"){ const toast=qs("#adminToast"); if(!toast)return; toast.textContent=message; toast.className="admin-toast "+(type||"success"); requestAnimationFrame(()=>toast.classList.add("show")); clearTimeout(showAdminToast.timer); showAdminToast.timer=setTimeout(()=>toast.classList.remove("show"),3200); } function showUnauthorized(){ qs("#systemStatus").textContent = "需要 token"; qs("#systemStatus").className = "status-badge warn"; setLoginCover(true); } function tableEmpty(cols,text){ return '<tr><td colspan="'+cols+'" class="empty">'+esc(text)+'</td></tr>'; }
     async function loadSummary(){ const s = await api("/api/admin/summary"); qs("#metrics").innerHTML = [["業務",s.sales],["用戶",s.customers],["商品",s.products],["LINE 訊息",s.messages],["母站轉送",s.webhooks],["高風險",s.highRisk]].map(i => '<div class="stat-card"><div class="stat-label">'+esc(i[0])+'</div><div class="stat-value">'+money(i[1])+'</div></div>').join(""); const latest = s.latestMother || {}; const motherState = latest.motherStatus ? "HTTP " + latest.motherStatus : "尚無紀錄"; qs("#opsSummary").innerHTML = [["Worker",publicUrl],["LINE Webhook",publicUrl+"/line-webhook"],["母站 Webhook",motherUrl],["最近母站轉送",motherState],["最近訊息",latest.messageText||"尚無"],["最近時間",latest.createdAt||"尚無"]].map(i => '<div class="ops-item"><div class="ops-label">'+esc(i[0])+'</div><div class="ops-value">'+esc(i[1])+'</div></div>').join(""); qs("#lastRefresh").textContent = new Date().toLocaleString("zh-TW"); qs("#systemStatus").textContent = "正常"; qs("#systemStatus").className = "status-badge"; }
+    function analyticsPercent(value){ return (Number(value||0)).toFixed(1)+"%"; }
+    function analyticsDate(value){ if(!value)return "-"; try{return new Date(value).toLocaleString("zh-TW",{timeZone:"Asia/Taipei",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});}catch(_){return value;} }
+    async function loadMenuClickReport(){ const status=qs("#menuClickMethod"); if(status)status.textContent="統計中…"; try{ const days=qs("#menuClickPeriod")?.value||"30"; const report=await api("/api/admin/menu-click-report?days="+encodeURIComponent(days)); const totals=report.totals||{}; qs("#menuClickMetrics").innerHTML=[["有效點擊",totals.validClicks],["有效使用者",totals.validUsers],["排除測試點擊",totals.excludedClicks],["原始點擊",totals.observedClicks]].map(item=>'<div class="stat-card"><div class="stat-label">'+esc(item[0])+'</div><div class="stat-value">'+money(item[1])+'</div></div>').join(""); const exclusion=report.exclusions||{}; const reasons=exclusion.clicksByReason||{}; qs("#menuClickExclusions").innerHTML=[["統計期間",report.period?.label||"-"],["自動排除名單","總部管理 "+money(exclusion.configuredManagers)+" 人、業務／工作人員 "+money(exclusion.detectedStaff)+" 人"],["額外排除名單",money(exclusion.configuredOperators)+" 人"],["無效點擊明細","管理員 "+money(reasons.manager)+"、操作人員 "+money(reasons.operator)+"、業務／工作人員 "+money(reasons.staff)+"、測試 UID "+money(reasons.test)+"、無法識別 "+money(reasons.unattributed)]].map(item=>'<div class="ops-item"><div class="ops-label">'+esc(item[0])+'</div><div class="ops-value">'+esc(item[1])+'</div></div>').join(""); qs("#menuClickRows").innerHTML=(report.buttons||[]).map(row=>'<tr><td><strong>'+esc(row.button)+'</strong></td><td>'+money(row.clicks)+'</td><td>'+money(row.uniqueUsers)+'</td><td><strong>'+analyticsPercent(row.clickSharePct)+'</strong></td><td>'+analyticsPercent(row.userReachPct)+'</td><td>'+esc(analyticsDate(row.lastClickedAt))+'</td></tr>').join("")||tableEmpty(6,"此期間尚無有效點擊"); if(status)status.textContent=(report.period?.label||"")+" · 更新於 "+new Date(report.generatedAt).toLocaleString("zh-TW"); return true; }catch(err){ if(status)status.textContent="統計失敗："+err.message; qs("#menuClickRows").innerHTML=tableEmpty(6,"報表讀取失敗"); return false; } }
+    async function saveAnalyticsExclusions(){ const ok=await saveSettings("analyticsExclusionStatus"); if(ok)await loadMenuClickReport(); }
     async function loadSales(){ const rows = await api("/api/sales/reps"); qs("#salesRows").innerHTML = rows.map(r => '<tr><td><strong>'+esc(r.name)+'</strong><div class="muted">'+esc(r.phone)+'</div></td><td class="mono">'+esc(r.salesCode)+'</td><td>'+(r.qrUrl?'<img class="qr" src="'+esc(r.qrUrl)+'" alt="QR">':"-")+'</td><td><a href="'+esc(r.inviteUrl)+'" target="_blank">開啟</a><div class="mono summary-text">'+esc(r.inviteUrl)+'</div></td><td>'+badge(r.status||"active")+'</td></tr>').join("") || tableEmpty(5,"尚無業務"); }
     async function loadCustomers(){ adminCustomers = await api("/api/admin/customers"); renderCustomers(); renderPointMembers(); if(!activePointCustomer && adminCustomers.length){ activePointCustomer = adminCustomers[0]; await loadSelectedPointLedger(); } loadPointBalancePreviews(); } function displayMemberName(r){ const name = String(r.displayName || "").trim(); const uid = String(r.lineUserId || "").trim(); return name && name !== uid ? name : "LINE 會員"; } function customerTypeLabel(r){ return String(r.customerType || "customer") === "sales" ? "業務" : "一般客戶"; } function memberInitial(r){ return displayMemberName(r).trim().slice(0,1).toUpperCase(); } function memberAvatarHtml(r){ return r.pictureUrl ? '<img class="member-avatar" src="'+esc(r.pictureUrl)+'" alt="">' : '<span class="member-avatar">'+esc(memberInitial(r))+'</span>'; } function renderCustomers(){ const q = (qs("#customerSearch")?.value || "").trim().toLowerCase(); const rows = adminCustomers.filter(r => !q || [displayMemberName(r),r.displayName,r.lineUserId,r.salesName,r.salesCode,customerTypeLabel(r),r.referrerName,r.referrerLineUserId].join(" ").toLowerCase().includes(q)); qs("#customerRows").innerHTML = rows.map(r => '<tr><td><div class="member-cell">'+memberAvatarHtml(r)+'<div><div class="member-name">'+esc(displayMemberName(r))+'</div><div class="muted">'+esc(r.status||"active")+'</div></div></div></td><td class="mono">'+esc(r.lineUserId)+'</td><td><span class="tier-badge">'+esc(customerTypeLabel(r))+'</span><div class="muted">'+esc(r.referrerName ? ("介紹人：" + r.referrerName) : (r.referrerLineUserId ? ("介紹人：" + r.referrerLineUserId) : "介紹人：未設定"))+'</div></td><td>'+esc((r.firstSeenAt||"").slice(0,10))+'</td><td><button class="crm-action" data-crm="'+esc(r.lineUserId)+'">CRM 檔案</button></td></tr>').join("") || tableEmpty(5,"尚無會員"); qsa("[data-crm]").forEach(btn => btn.onclick = () => openCustomerDetail(btn.dataset.crm)); } function setReferrerField(current){ qs("#crmReferrer").value = current?.referrerLineUserId || ""; } async function syncProfiles(){ qs("#syncProfileStatus").textContent = "同步中"; try{ const result = await api("/api/admin/customers/sync-profiles",{method:"POST",body:JSON.stringify({limit:200})}); qs("#syncProfileStatus").textContent = "已更新 " + money(result.updated || 0) + " 位"; await loadCustomers(); }catch(err){ qs("#syncProfileStatus").textContent = err.message; } } function closeCrmModal(){ activeCustomer = null; qs("#crmModal").style.display = "none"; } async function openCustomerDetail(lineUserId){ activeCustomer = adminCustomers.find(r => r.lineUserId === lineUserId); if(!activeCustomer) return; qs("#crmModal").style.display = "flex"; qs("#crmAvatar").outerHTML = activeCustomer.pictureUrl ? '<img class="member-avatar" id="crmAvatar" src="'+esc(activeCustomer.pictureUrl)+'" alt="">' : '<span class="member-avatar" id="crmAvatar">'+esc(memberInitial(activeCustomer))+'</span>'; qs("#crmTitle").textContent = "會員檔案：" + displayMemberName(activeCustomer); qs("#crmMemberId").textContent = "LINE UID：" + activeCustomer.lineUserId; qs("#crmName").value = displayMemberName(activeCustomer) === "LINE 會員" ? "" : displayMemberName(activeCustomer); qs("#crmUid").value = activeCustomer.lineUserId; qs("#crmSales").value = (activeCustomer.salesName||"未綁定") + (activeCustomer.salesCode ? " / " + activeCustomer.salesCode : ""); qs("#crmDate").value = (activeCustomer.firstSeenAt||"").slice(0,10); qs("#crmCustomerType").value = activeCustomer.customerType === "sales" ? "sales" : "customer"; setReferrerField(activeCustomer); qs("#crmTags").innerHTML = ["一般會員","VIP","團購主","企業客戶","經銷夥伴","LINE 會員","購物會員","點數轉入","高風險","黑名單","A-首購客","B-回購客","C-潛在顧客"].map(t => '<span class="crm-tag">'+esc(t)+'</span>').join(""); await loadCustomerPoints(); } async function saveCustomerCrm(){ if(!activeCustomer) return; const payload = {lineUserId:activeCustomer.lineUserId,displayName:qs("#crmName").value,customerType:qs("#crmCustomerType").value,referrerLineUserId:qs("#crmReferrer").value}; qs("#pointStatus").textContent = "儲存中"; try{ const saved = await api("/api/admin/customers",{method:"PATCH",body:JSON.stringify(payload)}); const idx = adminCustomers.findIndex(r => r.lineUserId === saved.lineUserId); if(idx >= 0) adminCustomers[idx] = Object.assign({}, adminCustomers[idx], saved); activeCustomer = Object.assign({}, activeCustomer, saved); renderCustomers(); qs("#pointStatus").textContent = "CRM 檔案已儲存"; closeCrmModal(); }catch(err){ qs("#pointStatus").textContent = err.message; } } function normalizePointLogs(result){ const nested = result?.data?.data?.data || result?.data?.data || result?.data || {}; return Array.isArray(result.logs) ? result.logs : (Array.isArray(nested.list) ? nested.list : (Array.isArray(result.items) ? result.items : [])); } function pointAmount(log){ return Number(log.get_point||log.points||log.amount||log.point||0) || 0; } function pointBalance(result, logs){ if(Array.isArray(logs) && logs.length) return logs.reduce((sum, log) => sum + pointAmount(log), 0); return Number(result.balance ?? 0) || 0; } function pointEmptyReason(result){ const query = result.query || result?.data?.data?.data?.query || {}; if(result.notFoundAsEmpty) return "母站尚無此會員點數紀錄"; if(result.ok && Number(result?.pagination?.total || 0) === 0) return "母站查得到會員，但此 LINE UID 目前沒有點數紀錄"; return result.message || result.error || "目前尚無紀錄"; } async function loadCustomerPoints(){ if(!activeCustomer) return; qs("#pointStatus").textContent = "點數讀取中"; qs("#pointBalance").textContent = "0"; try{ const result = await api("/api/points/list?lineUserId=" + encodeURIComponent(activeCustomer.lineUserId)); const logs = normalizePointLogs(result); const balance = pointBalance(result, logs); qs("#pointBalance").textContent = money(balance); qs("#pointStatus").textContent = result.skipped ? (result.error || "點數 API 尚未設定") : "點數已更新"; qs("#pointRows").innerHTML = logs.map(log => { const amt = pointAmount(log); const sign = amt >= 0 ? "+" : "-"; return '<div class="point-log"><div><div class="point-log-title">'+esc(log.event_content||log.eventContent||log.reason||log.event_name||log.eventName||"點數異動")+'</div><div class="point-log-date">'+esc(log.created_at||log.createdAt||log.date||"")+'</div></div><div class="point-log-amt" style="color:'+(amt>=0?'#06c755':'#dc2626')+'">'+sign+money(Math.abs(amt))+'</div></div>'; }).join("") || '<div class="empty">'+esc(pointEmptyReason(result))+'</div>'; }catch(err){ qs("#pointStatus").textContent = err.message; qs("#pointRows").innerHTML = '<div class="empty">點數資料讀取失敗</div>'; } } async function submitPointAdjust(type){ if(!activeCustomer) return; const raw = Number(qs("#pointAmount").value || 0); const reason = qs("#pointReason").value.trim(); if(!raw || raw <= 0){ qs("#pointStatus").textContent = "請輸入大於 0 的點數"; return; } if(!reason){ qs("#pointStatus").textContent = "請填寫異動原因"; return; } const points = type === "spend" ? -Math.abs(raw) : Math.abs(raw); qs("#pointStatus").textContent = "送出中"; try{ const result = await api("/api/points/adjust",{method:"POST",body:JSON.stringify({lineUserId:activeCustomer.lineUserId,eventName:type === "spend" ? "後台扣點" : "後台贈點",eventContent:reason,points})}); qs("#pointStatus").textContent = result.skipped ? (result.error || "點數 API 尚未設定") : "點數調整完成"; await loadCustomerPoints(); }catch(err){ qs("#pointStatus").textContent = err.message; } }
     function renderPointMembers(){ const q = (qs("#pointsSearch")?.value || "").trim().toLowerCase(); const rows = adminCustomers.filter(r => !q || [displayMemberName(r),r.displayName,r.lineUserId,r.salesName,r.salesCode].join(" ").toLowerCase().includes(q)); if(!activePointCustomer && rows.length) activePointCustomer = rows[0]; qs("#pointsMemberRows").innerHTML = rows.map(r => { const selected = activePointCustomer && activePointCustomer.lineUserId === r.lineUserId; const cached = pointBalanceCache[r.lineUserId]; const balanceText = cached ? String(cached.balance) : "未讀取"; return '<tr><td><div class="member-cell">'+memberAvatarHtml(r)+'<div><div class="member-name">'+esc(displayMemberName(r))+'</div><div class="muted">'+esc(customerTypeLabel(r))+'</div></div></div></td><td class="mono">'+esc(r.lineUserId)+'</td><td>'+esc(r.salesName||"未綁定")+'<div class="mono">'+esc(r.salesCode||"")+'</div></td><td><strong>'+esc(balanceText)+'</strong></td><td><button class="crm-action" data-points="'+esc(r.lineUserId)+'">'+(selected?"已選取":"查看流水")+'</button></td></tr>'; }).join("") || tableEmpty(5,"尚無會員"); qsa("[data-points]").forEach(btn => btn.onclick = () => { activePointCustomer = adminCustomers.find(r => r.lineUserId === btn.dataset.points); loadSelectedPointLedger(); }); }
@@ -7511,6 +7670,9 @@ function renderHookteaAdminPage(env) {
     async function deleteAiKnowledge(id){ if(!id||!confirm("刪除這份知識文件？")) return; setKnowledgeStatus("刪除中","info"); try{ await api("/api/admin/ai-knowledge/"+encodeURIComponent(id),{method:"DELETE"}); await loadAiKnowledge(); setKnowledgeStatus("✓ 知識文件已刪除，後續聊天室回應將不再引用。","success"); }catch(err){ setKnowledgeStatus("刪除失敗："+err.message,"error"); } }
     function setupSmartMonitorEvents(){ on("#smartSearch","input",renderSmartMonitor); on("#smartReload","click",loadAi); on("#smartAnalyze","click",analyzeSmartThread); on("#smartSearchBtn","click",renderSmartMonitor); on("#smartSend","click",()=>{ qs("#smartAiStatus").textContent="目前為人工送出預備區，尚未自動回覆"; }); on("#smartMarkPending","click",()=>{ qs("#smartAiStatus").textContent="已標示待處理"; }); on("#smartMarkDone","click",()=>{ qs("#smartAiStatus").textContent="已標示處理完畢"; }); on("#uploadKnowledge","click",()=>qs("#knowledgeFiles")?.click()); on("#knowledgeFiles","change",uploadKnowledgeFiles); on("#reloadKnowledge","click",loadAiKnowledge); on("#saveKnowledgeText","click",saveKnowledgeText); on("#knowledgeList","click",event=>{ const button=event.target.closest("[data-delete-knowledge]"); if(button) deleteAiKnowledge(button.dataset.deleteKnowledge); }); qsa("[data-smart-risk]").forEach(btn=>btn.onclick=()=>{ activeSmartRisk=btn.dataset.smartRisk||"ALL"; qsa("[data-smart-risk]").forEach(b=>b.classList.toggle("active",b===btn)); renderSmartMonitor(); }); }
     setupSmartMonitorEvents();
+    on("#reloadMenuClicks","click",loadMenuClickReport);
+    on("#menuClickPeriod","change",loadMenuClickReport);
+    on("#saveAnalyticsExclusions","click",saveAnalyticsExclusions);
     function memberTags(m){ return Array.isArray(m.broadcastTags) ? m.broadcastTags : []; }
     function broadcastAudienceRows(){ const tag=(qs("#broadcastTag")?.value||"").trim(); const tier=(qs("#broadcastTier")?.value||"").trim(); const keyword=(qs("#broadcastKeyword")?.value||"").trim().toLowerCase(); return (broadcastData.members||[]).filter(m => { if(tag && !memberTags(m).includes(tag)) return false; if(tier && String(m.memberTier||"")!==tier) return false; if(keyword){ const hay=[m.name,m.phone,m.address,m.userId,m.memberTier].join(" ").toLowerCase(); if(!hay.includes(keyword)) return false; } return true; }); }
     function renderBroadcast(){ const tags=broadcastData.tags||[]; const members=broadcastData.members||[]; const tagOptions='<option value="">全部標籤</option>'+tags.map(t=>'<option value="'+esc(t.name)+'">'+esc(t.name)+'</option>').join(""); const oldTag=qs("#broadcastTag")?.value||""; if(qs("#broadcastTag")){ qs("#broadcastTag").innerHTML=tagOptions; qs("#broadcastTag").value=oldTag; } const oldSelected=qs("#selectedBroadcastTag")?.value||""; if(qs("#selectedBroadcastTag")){ qs("#selectedBroadcastTag").innerHTML=tags.map(t=>'<option value="'+esc(t.name)+'">'+esc(t.name)+'</option>').join("")||'<option value="">請先建立標籤</option>'; qs("#selectedBroadcastTag").value=oldSelected || (tags[0]?.name||""); } const tiers=[...new Set(members.map(m=>String(m.memberTier||"").trim()).filter(Boolean))]; const oldTier=qs("#broadcastTier")?.value||""; if(qs("#broadcastTier")){ qs("#broadcastTier").innerHTML='<option value="">全部等級</option>'+tiers.map(t=>'<option value="'+esc(t)+'">'+esc(t)+'</option>').join(""); qs("#broadcastTier").value=oldTier; } qs("#broadcastTagChips").innerHTML=tags.map(t=>'<button class="btn-outline btn-small" data-select-tag="'+esc(t.name)+'">'+esc(t.name)+' <span class="muted">'+money(members.filter(m=>memberTags(m).includes(t.name)).length)+'</span></button>').join("") || '<span class="muted">尚未建立標籤</span>'; qsa("[data-select-tag]").forEach(btn=>btn.onclick=()=>{ qs("#selectedBroadcastTag").value=btn.dataset.selectTag; renderBroadcast(); }); const moduleCount=(broadcastData.modules||[]).filter(m=>m.active!==false).length; qs("#broadcastModuleOptions").innerHTML=(broadcastData.modules||[]).filter(m=>m.active!==false).map(m=>'<label class="ops-item" style="display:flex;gap:10px;align-items:flex-start;margin:0"><input type="checkbox" data-broadcast-module="'+esc(m.id)+'"><span><strong>'+esc(m.moduleName||m.keyword||m.id)+'</strong><div class="muted">'+esc(m.replyType)+(m.keyword?' · '+esc(m.keyword):'')+'</div></span></label>').join("") || '<div class="empty">尚未建立可推播模組，請到「機器人與專區卡片」新增。</div>'; renderBroadcastAudience(); renderBroadcastMembers(); renderBroadcastCampaigns(); qs("#broadcastHistoryCount").textContent=money((broadcastData.campaigns||[]).length); }
@@ -7544,7 +7706,7 @@ function renderHookteaAdminPage(env) {
     settingFields().forEach(el => el.addEventListener("input", () => { const key = el.dataset.setting; settingFields().forEach(other => { if(other !== el && other.dataset.setting === key) other.value = el.value; }); hookteaSettings = collectSettings(); renderSettingsPreview(); renderLiffLinks(); }));
     async function loadSettings(notify=false){ const status = qs("#settingsStatus"); const shopStatus = qs("#shopModuleStatus"); if(status) status.textContent="讀取中…"; if(shopStatus) shopStatus.textContent="讀取中…"; try{ const [data]=await Promise.all([api("/api/admin/settings"),loadGeminiProvider()]); fillSettings(data.settings||{}); const label=data.updatedAt?"已載入 "+data.updatedAt:"已載入預設值"; if(status) status.textContent=label; if(shopStatus) shopStatus.textContent=label; if(notify)showAdminToast("設定已重新載入","success"); return true; }catch(err){ if(status) status.textContent="讀取失敗："+err.message; if(shopStatus) shopStatus.textContent="讀取失敗："+err.message; if(notify)showAdminToast("讀取設定失敗："+err.message,"error"); return false; } }
     async function saveSettings(statusId){ const target = qs("#"+(statusId||"settingsStatus")); const button=statusId==="shopModuleStatus"?qs("#saveShopModules"):qs("#saveSettings"); const originalLabel=button?.textContent||""; if(target) target.textContent="儲存中…"; if(button){button.disabled=true;button.textContent="儲存中…";} try{ const saved=await api("/api/admin/settings",{method:"POST",body:JSON.stringify({settings:collectSettings()})}); fillSettings(saved.settings||{}); const time=new Date().toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit",second:"2-digit"}); if(target) target.textContent="已儲存 · "+time; qs("#systemStatus").textContent="已儲存"; qs("#systemStatus").className="status-badge"; showAdminToast("設定已成功儲存 · "+time,"success"); return true; }catch(err){ if(target) target.textContent="儲存失敗："+err.message; qs("#systemStatus").textContent="儲存失敗"; qs("#systemStatus").className="status-badge danger"; showAdminToast("儲存失敗："+err.message,"error"); return false; }finally{ if(button){button.disabled=false;button.textContent=originalLabel;} } }    async function loadReports(){ const period = qs("#reportPeriod").value || new Date().toISOString().slice(0,7); qs("#reportPeriod").value = period; const rows = await api("/api/reports/monthly-sales?period=" + encodeURIComponent(period)); qs("#reportRows").innerHTML = rows.map(r => '<tr><td>'+esc(r.salesName||"-")+'</td><td class="mono">'+esc(r.salesCode||"")+'</td><td>'+money(r.orderCount)+'</td><td>'+money(r.revenue)+'</td><td>'+money(r.grossProfit)+'</td></tr>').join("") || tableEmpty(5,"尚無業績資料"); }
-    async function loadAll(notify=false){ try{ await Promise.all([loadSummary(),loadSales(),loadCustomers(),loadProducts(),loadOrders(),loadMediaVideos(),loadMessages(),loadWebhooks(),loadAudit(),loadAi(),loadAiKnowledge(),loadReports(),loadSettings()]); if(notify)showAdminToast("資料已重新載入 · "+new Date().toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit",second:"2-digit"}),"success"); return true; }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } if(notify)showAdminToast("更新失敗："+err.message,"error"); return false; } }
+    async function loadAll(notify=false){ try{ await Promise.all([loadSummary(),loadMenuClickReport(),loadSales(),loadCustomers(),loadProducts(),loadOrders(),loadMediaVideos(),loadMessages(),loadWebhooks(),loadAudit(),loadAi(),loadAiKnowledge(),loadReports(),loadSettings()]); if(notify)showAdminToast("資料已重新載入 · "+new Date().toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit",second:"2-digit"}),"success"); return true; }catch(err){ if(err.status === 401 || err.message === "admin_unauthorized") showUnauthorized(); else { qs("#systemStatus").textContent = "異常"; qs("#systemStatus").className = "status-badge danger"; qs("#opsSummary").innerHTML = '<div class="ops-item"><div class="ops-label">錯誤</div><div class="ops-value">'+esc(err.message)+'</div></div>'; } if(notify)showAdminToast("更新失敗："+err.message,"error"); return false; } }
     setView("dashboard"); loadAll();
   </script>
 </body>
