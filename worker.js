@@ -34,6 +34,7 @@ const LINE_KEYWORD_MENU_KEYWORDS = new Set([
 ]);
 
 const LINE_NAVIGATION_MENU_KEYWORD = "導航與停車指南";
+const LINE_LATEST_ACTIVITY_MENU_KEYWORD = "最新活動";
 const LINE_POOL_HYGIENE_MENU_KEYWORD = "入池衛生須知";
 const LINE_BUSINESS_HOURS_MENU_KEYWORD = "營業時間與公休";
 const LINE_JIAOXI_RECOMMENDATION_MENU_KEYWORD = "礁溪順遊推薦";
@@ -124,6 +125,12 @@ const LINE_VISITOR_PREP_LINKS = [
   { label: "礁溪即時天氣", uri: "https://www.cwa.gov.tw/V8/C/W/Town/Town.html?TID=1000205" },
   { label: "礁溪站動態", uri: "https://tip.railway.gov.tw/tra-tip-web/tip/tip00H/tipH41/viewStaInfo/7210" },
   { label: "宜蘭即時路況", uri: "https://ilcpb.ivs.hinet.net/public/ilcpb_live_cam" },
+];
+const LINE_GOVERNMENT_BENEFIT_LINKS = [
+  { label: "平日國旅優惠", uri: "https://www.taiwan.net.tw/m1.aspx?sNo=0044538" },
+  { label: "臺南住宿好康", uri: "https://www.tainan.gov.tw/news_content.aspx?n=13370&s=8810706&sms=9748" },
+  { label: "500元運動幣", uri: "https://500.gov.tw/FOAS/SportCourse.action" },
+  { label: "Taiwan PASS優惠", uri: "https://www.taiwan.net.tw/m1.aspx?sNo=0044550" },
 ];
 const LINE_JIAOXI_RECOMMENDATION_CATEGORIES = [
   { key: "food", label: "食｜在地美食", keyword: "礁溪推薦｜食", emoji: "🍜", title: "礁溪在地美食" },
@@ -1076,6 +1083,23 @@ function buildLineBusinessHoursMessage() {
   };
 }
 
+function buildLineLatestActivityMessage() {
+  return {
+    type: "text",
+    text: `${LINE_KEYWORD_MENU_REPLIES.get(LINE_LATEST_ACTIVITY_MENU_KEYWORD)}\n\n下方整理近期政府旅遊與運動優惠，實際資格、名額及截止日期請以官方頁面最新公告為準。`,
+    quickReply: {
+      items: LINE_GOVERNMENT_BENEFIT_LINKS.map(link => ({
+        type: "action",
+        action: {
+          type: "uri",
+          label: link.label,
+          uri: link.uri,
+        },
+      })),
+    },
+  };
+}
+
 function buildLineCustomerServiceFlexMessage() {
   return {
     type: "flex",
@@ -1619,6 +1643,7 @@ async function buildLineKeywordMenuReplyDecision(env, events) {
   const target = lineKeywordMenuEvent(events);
   if (!target) return { handled: false, outcome: "not_applicable", replyPayload: null, summary: { handled: false } };
   try {
+    const isLatestActivity = target.keyword === LINE_LATEST_ACTIVITY_MENU_KEYWORD;
     const isParkingGuide = target.keyword === LINE_NAVIGATION_MENU_KEYWORD;
     const isPoolHygieneGuide = target.keyword === LINE_POOL_HYGIENE_MENU_KEYWORD;
     const isBusinessHours = target.keyword === LINE_BUSINESS_HOURS_MENU_KEYWORD;
@@ -1627,7 +1652,8 @@ async function buildLineKeywordMenuReplyDecision(env, events) {
     const isFaq = target.keyword === LINE_FAQ_MENU_KEYWORD;
     const jiaoxiRecommendationCategory = lineJiaoxiRecommendationCategory(target.keyword);
     let message;
-    if (isParkingGuide) message = buildLineParkingFlexMessage(env);
+    if (isLatestActivity) message = buildLineLatestActivityMessage();
+    else if (isParkingGuide) message = buildLineParkingFlexMessage(env);
     else if (isPoolHygieneGuide) message = await buildLinePoolHygieneFlexMessage(env);
     else if (isBusinessHours) message = buildLineBusinessHoursMessage();
     else if (isJiaoxiRecommendationMenu) message = buildLineJiaoxiRecommendationMenuMessage();
