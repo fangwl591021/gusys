@@ -127,9 +127,9 @@ const LINE_VISITOR_PREP_LINKS = [
   { label: "宜蘭即時路況", uri: "https://ilcpb.ivs.hinet.net/public/ilcpb_live_cam" },
 ];
 const LINE_GOVERNMENT_BENEFIT_LINKS = [
-  { label: "平日國旅優惠", uri: "https://www.taiwan.net.tw/m1.aspx?sNo=0044538" },
-  { label: "臺南住宿好康", uri: "https://www.tainan.gov.tw/news_content.aspx?n=13370&s=8810706&sms=9748" },
-  { label: "500元運動幣", uri: "https://500.gov.tw/FOAS/SportCourse.action" },
+  { label: "平日國旅優惠", uri: "https://www.taiwan.net.tw/m1.aspx?sNo=0044552" },
+  { label: "臺南住宿抽好禮", uri: "https://www.tainan.gov.tw/News_Content.aspx?n=13370&s=8833140" },
+  { label: "運動揮汗有禮", uri: "https://500.gov.tw/registrant/" },
   { label: "Taiwan PASS優惠", uri: "https://www.taiwan.net.tw/m1.aspx?sNo=0044550" },
 ];
 const LINE_JIAOXI_RECOMMENDATION_CATEGORIES = [
