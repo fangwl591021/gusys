@@ -128,7 +128,7 @@ const LINE_VISITOR_PREP_LINKS = [
 ];
 const LINE_GOVERNMENT_BENEFIT_LINKS = [
   { label: "平日國旅優惠", uri: "https://www.taiwan.net.tw/m1.aspx?sNo=0044552" },
-  { label: "臺南住宿抽好禮", uri: "https://www.tainan.gov.tw/News_Content.aspx?n=13370&s=8833140" },
+  { label: "臺南住宿抽好禮", uri: "https://www.tainan.gov.tw/News_Content.aspx?n=13370&s=8834848" },
   { label: "運動揮汗有禮", uri: "https://500.gov.tw/registrant/" },
   { label: "Taiwan PASS優惠", uri: "https://www.taiwan.net.tw/m1.aspx?sNo=0044550" },
 ];
