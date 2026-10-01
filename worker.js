@@ -129,7 +129,7 @@ const LINE_VISITOR_PREP_LINKS = [
 const LINE_GOVERNMENT_BENEFIT_LINKS = [
   { label: "平日國旅優惠", uri: "https://www.taiwan.net.tw/m1.aspx?sNo=0044552" },
   { label: "臺南住宿抽好禮", uri: "https://www.tainan.gov.tw/News_Content.aspx?n=13370&s=8834848" },
-  { label: "新北運動刮好禮", uri: "https://www.t-sports.ntpc.gov.tw/home.jsp?act=be4f48068b2b0031&dataserno=ff48c6841558c315875ecf597ccc64cb&id=d127e0ce0f4f407b" },
+  { label: "台灣好行抽好禮", uri: "https://admin.taiwan.net.tw/News/News?a=35&id=36366" },
   { label: "Taiwan PASS優惠", uri: "https://www.taiwan.net.tw/m1.aspx?sNo=0044550" },
 ];
 const LINE_JIAOXI_RECOMMENDATION_CATEGORIES = [
