@@ -583,10 +583,16 @@ main { width: min(100%, 900px); margin: 0 auto; overflow: hidden; }
   background: rgba(255,255,255,.9);
   font-size: 24px;
 }
-.dialog-visual { position: relative; height: 200px; margin: 0 -20px 22px; overflow: hidden; background: #dcebea; }
-.dialog-visual img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.dialog-visual::after { content: ""; position: absolute; inset: auto 0 0; height: 54%; background: linear-gradient(180deg, transparent, rgba(3,31,39,.6)); pointer-events: none; }
-.dialog-visual figcaption { position: absolute; z-index: 1; right: 14px; bottom: 12px; left: 14px; margin: 0; color: #fff; font-size: 11px; font-weight: 800; line-height: 1.45; text-shadow: 0 1px 3px rgba(0,0,0,.65); }
+.dialog-visual { position: relative; height: 180px; margin: 0 -20px 22px; overflow: hidden; background: var(--aqua); }
+.dialog-visual::before { content: ""; position: absolute; left: -20px; right: -20px; bottom: -45px; height: 85px; border-radius: 50%; background: #5a9d72; }
+.dialog-fish { position: absolute; width: 46px; height: 23px; border-radius: 50%; background: var(--yellow); }
+.dialog-fish::before { content: ""; position: absolute; left: -13px; top: 4px; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-right: 15px solid currentColor; color: var(--yellow); }
+.dialog-fish::after { content: ""; position: absolute; right: 8px; top: 7px; width: 4px; height: 4px; border-radius: 50%; background: var(--deep); }
+.fish-a { top: 30px; left: 18%; }
+.fish-b { top: 72px; right: 20%; transform: scale(.75); background: var(--coral); }
+.fish-b::before { color: var(--coral); }
+.fish-c { top: 18px; right: 10%; transform: scale(.55); background: var(--violet); }
+.fish-c::before { color: var(--violet); }
 .dialog-number { margin: 0 0 6px; color: var(--green); font-size: 12px; font-weight: 900; }
 .pool-dialog h2 { margin: 0 42px 8px 0; font-size: 30px; }
 .dialog-lead { margin: 0 0 13px; color: var(--muted); font-size: 14px; line-height: 1.65; }

@@ -97,14 +97,6 @@
   const SOURCE_RECENT = "https://qpjj.tw/%E3%80%90%E7%A4%81%E6%BA%AA%E3%80%91%E9%87%8D%E5%8F%A3%E5%91%B3%E6%BA%AB%E6%B3%89%E9%AD%9A-%E7%A4%81%E6%BA%AA%E6%9C%80%E5%A4%9A%E5%85%83%E7%9A%84%E6%BA%AB%E6%B3%89%E9%AD%9A%E6%B3%A1%E8%85%B3/";
   const SOURCE_OVERVIEW = "https://www.abic.com.tw/place/view/id/15261";
   const SOURCE_CLASSIC = "https://fgblog.fashionguide.com.tw/12728/posts/295160";
-  const SCENE_PHOTOS = [
-    "/assets/pool-island/scene-01.webp",
-    "/assets/pool-island/scene-02.webp",
-    "/assets/pool-island/scene-03.webp",
-    "/assets/pool-island/scene-04.webp",
-    "/assets/pool-island/scene-05.webp",
-    "/assets/pool-island/scene-06.webp"
-  ];
 
   const POOL_DETAILS = {
     junior: {
@@ -205,10 +197,7 @@
     }
   };
 
-  POOL_ITEMS.forEach((pool, index) => {
-    Object.assign(pool, POOL_DETAILS[pool.id]);
-    pool.photo = SCENE_PHOTOS[index % SCENE_PHOTOS.length];
-  });
+  POOL_ITEMS.forEach((pool) => Object.assign(pool, POOL_DETAILS[pool.id]));
 
   const STORAGE_KEY = "gusys_pool_island_progress_v2";
   const diceFaces = ["●", "••", "∴", "∷", "⁙", "⠿"];
@@ -369,9 +358,8 @@
       tags.append(tag);
     });
     renderSensation(pool.sensation);
-    const photo = document.querySelector("#dialogPhoto");
-    photo.src = pool.photo;
-    photo.alt = `重口味溫泉魚店內實景，${pool.title}介紹頁`;
+    const visual = document.querySelector("#dialogVisual");
+    visual.style.background = pool.zone === "shore" ? "#78ced4" : pool.zone === "current" ? "#efaa8e" : "#aaaee0";
 
     document.querySelector("#dialogStory").textContent = pool.story;
     document.querySelector("#dialogBestFor").textContent = pool.bestFor;
