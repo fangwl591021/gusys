@@ -1,4 +1,5 @@
 import { renderSmartMenuStudioReplicaPage } from "./smart-menu-replica.js";
+import { handleJiaoxiIslandsApi } from "./jiaoxi-islands-api.js";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -197,6 +198,9 @@ export default {
       if (url.pathname === "/menu.html" || url.pathname === "/smart-menu.html") return renderSmartMenuStudioReplicaPage(request);
       if (url.pathname === "/") return renderHome(env);
       if (url.pathname === "/admin") return renderHookteaAdminPage(env);
+      if (url.pathname === "/jiaoxi-islands") return Response.redirect(`${url.origin}/jiaoxi-islands.html`, 302);
+      if (url.pathname === "/jiaoxi-islands-admin") return Response.redirect(`${url.origin}/jiaoxi-islands-admin.html`, 302);
+      if (url.pathname.startsWith("/api/jiaoxi-islands/") || url.pathname.startsWith("/api/admin/jiaoxi-islands/")) return await handleJiaoxiIslandsApi(request, env, url);
       if (url.pathname === "/action-modules.html") return renderActionModulesPage(request);
       if (url.pathname === "/mylittlesys_free.html") return renderActionFlexEditorPage();
       if (url.pathname === "/api/action-admin" && request.method === "POST") return handleActionAdminCompat(request, env);
@@ -1173,24 +1177,31 @@ function lineJiaoxiRecommendationCategory(keyword) {
   return LINE_JIAOXI_RECOMMENDATION_CATEGORIES.find(category => category.keyword === keyword) || null;
 }
 
-function buildLineJiaoxiRecommendationQuickReply() {
+function buildLineJiaoxiRecommendationQuickReply(env) {
   return {
-    items: LINE_JIAOXI_RECOMMENDATION_CATEGORIES.map(category => ({
+    items: [{
+      type: "action",
+      action: {
+        type: "uri",
+        label: "🗺️ 開啟群島",
+        uri: `${workerPublicBase(env)}/jiaoxi-islands.html`,
+      },
+    }, ...LINE_JIAOXI_RECOMMENDATION_CATEGORIES.map(category => ({
       type: "action",
       action: {
         type: "message",
         label: category.label,
         text: category.keyword,
       },
-    })),
+    }))],
   };
 }
 
-function buildLineJiaoxiRecommendationMenuMessage() {
+function buildLineJiaoxiRecommendationMenuMessage(env) {
   return {
     type: "text",
-    text: `${LINE_KEYWORD_MENU_REPLIES.get(LINE_JIAOXI_RECOMMENDATION_MENU_KEYWORD)}\n\n請點選下方「食、宿、遊、購、行」查看每類 5 個推薦。`,
-    quickReply: buildLineJiaoxiRecommendationQuickReply(),
+    text: `${LINE_KEYWORD_MENU_REPLIES.get(LINE_JIAOXI_RECOMMENDATION_MENU_KEYWORD)}\n\n點「開啟群島」可逛完整地圖、加入行程並從手機目前位置導航；也可直接點「食、宿、遊、購、行」查看推薦。`,
+    quickReply: buildLineJiaoxiRecommendationQuickReply(env),
   };
 }
 
@@ -1272,7 +1283,7 @@ function buildLineJiaoxiRecommendationFlexMessage(category, env) {
     type: "flex",
     altText: `${category.title}：5 個 Google Maps 推薦地點`,
     contents: { type: "carousel", contents: bubbles },
-    quickReply: buildLineJiaoxiRecommendationQuickReply(),
+    quickReply: buildLineJiaoxiRecommendationQuickReply(env),
   };
 }
 
@@ -1656,7 +1667,7 @@ async function buildLineKeywordMenuReplyDecision(env, events) {
     else if (isParkingGuide) message = buildLineParkingFlexMessage(env);
     else if (isPoolHygieneGuide) message = await buildLinePoolHygieneFlexMessage(env);
     else if (isBusinessHours) message = buildLineBusinessHoursMessage();
-    else if (isJiaoxiRecommendationMenu) message = buildLineJiaoxiRecommendationMenuMessage();
+    else if (isJiaoxiRecommendationMenu) message = buildLineJiaoxiRecommendationMenuMessage(env);
     else if (isCustomerService) message = buildLineCustomerServiceFlexMessage();
     else if (isFaq) message = buildLineFaqLinkFlexMessage();
     else if (jiaoxiRecommendationCategory) message = buildLineJiaoxiRecommendationFlexMessage(jiaoxiRecommendationCategory, env);

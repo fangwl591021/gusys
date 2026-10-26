@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#087f70">
+  <title>礁溪食宿遊購行群島｜重口味溫泉魚</title>
+  <link rel="stylesheet" href="/jiaoxi-islands.css?v=20261026-1">
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script>
+  <script src="/jiaoxi-islands.js?v=20261026-2" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div><span class="eyebrow">JIAOXI ISLANDS</span><h1>礁溪食宿遊購行群島</h1></div>
+    <button class="icon-button" id="soundToggle" aria-label="切換環境音" title="切換環境音">♪</button>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="introTitle">
+      <div class="intro-copy"><p class="kicker">以本店為中心，直接安排下一站</p><h2 id="introTitle">從重口味溫泉魚出發<br>逛五座礁溪主題島</h2><p>不必抽卡或等待。點島看店家、加入行程，再用手機目前位置精準導航。</p></div>
+      <div class="home-island" aria-label="重口味溫泉魚中心島"><span class="home-pin">本店</span><strong>重口味溫泉魚</strong><small>宜蘭縣礁溪鄉仁愛路23號</small><i class="ripple r1"></i><i class="ripple r2"></i></div>
+    </section>
+
+    <nav class="category-tabs" id="categoryTabs" aria-label="食宿遊購行分類"></nav>
+
+    <section class="world" id="world" aria-live="polite">
+      <div class="sea-motion" aria-hidden="true"></div>
+      <svg class="route-lines" viewBox="0 0 360 1040" preserveAspectRatio="none" aria-hidden="true"><path d="M180 35 C40 130 55 245 185 280 S320 430 178 490 S38 650 185 700 S315 865 178 1005"/><circle id="routeBoat" cx="180" cy="35" r="10"/></svg>
+      <div id="islandList" class="island-list"><div class="loading">正在整理礁溪群島…</div></div>
+    </section>
+
+    <section class="planner" aria-labelledby="plannerTitle">
+      <div class="section-heading"><div><span class="eyebrow">TRIP PLANNER</span><h2 id="plannerTitle">一鍵排出今天路線</h2></div><span id="planCount">0 站</span></div>
+      <div class="plan-modes" id="planModes"></div>
+      <ol id="planList" class="plan-list"></ol>
+      <div class="planner-actions"><button class="button secondary" id="clearPlan">清空</button><button class="button primary" id="startPlan">開始逐站導航</button></div>
+    </section>
+  </main>
+
+  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <aside class="place-sheet" id="placeSheet" aria-hidden="true" aria-labelledby="sheetTitle">
+    <button class="sheet-close icon-button" id="sheetClose" aria-label="關閉">×</button>
+    <img id="sheetImage" alt="" loading="lazy" onerror="this.hidden=true" onload="this.hidden=false">
+    <div class="sheet-content"><span id="sheetCategory" class="eyebrow"></span><h2 id="sheetTitle"></h2><div id="sheetRating" class="rating"></div><p id="sheetSummary"></p><div id="sheetTags" class="tags"></div><dl id="sheetFacts"></dl><p id="sheetSource" class="source"></p></div>
+    <div class="sheet-actions"><button class="button secondary" id="addPlan">＋ 加入行程</button><button class="button secondary" id="navStore">本店出發</button><button class="button primary" id="navCurrent">目前位置導航</button></div>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <footer>店家、營業、評分與交通資訊可能異動，出發前請以店家及 Google Maps 當下資訊為準。頁面不儲存手機定位。</footer>
+</body>
+</html>
