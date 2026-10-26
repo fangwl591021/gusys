@@ -583,16 +583,66 @@ main { width: min(100%, 900px); margin: 0 auto; overflow: hidden; }
   background: rgba(255,255,255,.9);
   font-size: 24px;
 }
-.dialog-visual { position: relative; height: 180px; margin: 0 -20px 22px; overflow: hidden; background: var(--aqua); }
-.dialog-visual::before { content: ""; position: absolute; left: -20px; right: -20px; bottom: -45px; height: 85px; border-radius: 50%; background: #5a9d72; }
-.dialog-fish { position: absolute; width: 46px; height: 23px; border-radius: 50%; background: var(--yellow); }
+.dialog-visual {
+  --water-top: #8be0e4;
+  --water-bottom: #45aeba;
+  position: relative;
+  height: 200px;
+  margin: 0 -20px 22px;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(180deg, var(--water-top), var(--water-bottom));
+  transition: background .35s ease;
+}
+.dialog-visual[data-zone="current"] { --water-top: #86d9df; --water-bottom: #3b9eae; }
+.dialog-visual[data-zone="lagoon"] { --water-top: #a9c9e9; --water-bottom: #6da3c6; }
+.dialog-visual::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -45% -25%;
+  opacity: .42;
+  background: repeating-radial-gradient(ellipse at 50% 0, transparent 0 20px, rgba(255,255,255,.68) 22px 25px, transparent 28px 48px);
+  animation: water-light 12s linear infinite;
+}
+.dialog-visual::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: -10%;
+  right: -10%;
+  bottom: -48px;
+  height: 105px;
+  border-radius: 50% 50% 0 0;
+  background: linear-gradient(180deg, #6eaf7d, #397456);
+  box-shadow: inset 0 10px 18px rgba(255,255,255,.18);
+  animation: riverbed 7s ease-in-out infinite alternate;
+}
+.dialog-light { position: absolute; inset: 0; background: linear-gradient(110deg, transparent 18%, rgba(255,255,255,.2) 38%, transparent 55%); transform: translateX(-70%); animation: light-sweep 6.5s ease-in-out infinite; }
+.dialog-fish { position: absolute; z-index: 2; width: 46px; height: 23px; border-radius: 50%; background: var(--yellow); filter: drop-shadow(0 5px 5px rgba(0,65,78,.18)); }
 .dialog-fish::before { content: ""; position: absolute; left: -13px; top: 4px; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-right: 15px solid currentColor; color: var(--yellow); }
 .dialog-fish::after { content: ""; position: absolute; right: 8px; top: 7px; width: 4px; height: 4px; border-radius: 50%; background: var(--deep); }
-.fish-a { top: 30px; left: 18%; }
-.fish-b { top: 72px; right: 20%; transform: scale(.75); background: var(--coral); }
+.fish-a { top: 38px; left: -60px; animation: swim-right 8.5s linear infinite; }
+.fish-b { top: 102px; right: -60px; background: var(--coral); animation: swim-left 10.5s linear -3s infinite; }
 .fish-b::before { color: var(--coral); }
-.fish-c { top: 18px; right: 10%; transform: scale(.55); background: var(--violet); }
+.fish-c { top: 20px; left: -48px; background: var(--violet); animation: swim-small 12.5s linear -6s infinite; }
 .fish-c::before { color: var(--violet); }
+.dialog-bubbles { position: absolute; z-index: 1; bottom: -22px; width: 8px; height: 8px; border: 2px solid rgba(255,255,255,.74); border-radius: 50%; box-shadow: 18px 20px 0 -1px rgba(255,255,255,.54), -8px 44px 0 1px rgba(255,255,255,.5), 12px 66px 0 -2px rgba(255,255,255,.65); animation: bubbles-up 5s linear infinite; }
+.bubbles-a { left: 22%; }
+.bubbles-b { right: 19%; animation-delay: -2.7s; animation-duration: 6.5s; }
+.dialog-ripple { position: absolute; z-index: 1; bottom: 43px; width: 72px; height: 18px; border: 2px solid rgba(231,255,250,.72); border-radius: 50%; opacity: 0; animation: ripple-out 3.8s ease-out infinite; }
+.ripple-a { left: 12%; }
+.ripple-b { right: 8%; animation-delay: -1.9s; }
+.dialog-visual.is-changing { animation: scene-change .48s ease-out; }
+@keyframes water-light { to { transform: translate3d(8%, 18%, 0) rotate(4deg); } }
+@keyframes riverbed { to { transform: translateY(7px) scaleX(1.04); } }
+@keyframes light-sweep { 0%,18% { transform: translateX(-75%); } 55%,100% { transform: translateX(105%); } }
+@keyframes swim-right { 0% { transform: translate3d(0,0,0) rotate(1deg); } 35% { transform: translate3d(230px,13px,0) rotate(-3deg); } 70% { transform: translate3d(470px,-5px,0) rotate(2deg); } 100% { transform: translate3d(680px,7px,0) rotate(0); } }
+@keyframes swim-left { 0% { transform: translate3d(0,0,0) scale(-.78,.78) rotate(0); } 45% { transform: translate3d(-310px,-12px,0) scale(-.78,.78) rotate(3deg); } 100% { transform: translate3d(-680px,8px,0) scale(-.78,.78) rotate(-2deg); } }
+@keyframes swim-small { 0% { transform: translate3d(0,0,0) scale(.56) rotate(0); } 50% { transform: translate3d(340px,18px,0) scale(.56) rotate(-5deg); } 100% { transform: translate3d(680px,3px,0) scale(.56) rotate(2deg); } }
+@keyframes bubbles-up { 0% { transform: translateY(0) scale(.7); opacity: 0; } 12% { opacity: .85; } 100% { transform: translateY(-225px) scale(1.08); opacity: 0; } }
+@keyframes ripple-out { 0% { transform: scale(.2); opacity: .8; } 75%,100% { transform: scale(1.8); opacity: 0; } }
+@keyframes scene-change { 0% { filter: brightness(.86); transform: scale(1.025); } 100% { filter: brightness(1); transform: scale(1); } }
 .dialog-number { margin: 0 0 6px; color: var(--green); font-size: 12px; font-weight: 900; }
 .pool-dialog h2 { margin: 0 42px 8px 0; font-size: 30px; }
 .dialog-lead { margin: 0 0 13px; color: var(--muted); font-size: 14px; line-height: 1.65; }
@@ -650,4 +700,8 @@ footer p { margin: 4px 0 0; color: #c9d5df; font-size: 12px; }
   html { scroll-behavior: auto; }
   .traveler { transition: none; }
   .dice.is-rolling { animation: none; }
+  .dialog-visual::before, .dialog-visual::after, .dialog-light, .dialog-fish, .dialog-bubbles, .dialog-ripple, .dialog-visual.is-changing { animation: none; }
+  .fish-a { left: 18%; }
+  .fish-b { right: 20%; transform: scale(-.78,.78); }
+  .fish-c { left: auto; right: 10%; transform: scale(.56); }
 }

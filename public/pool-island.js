@@ -359,7 +359,9 @@
     });
     renderSensation(pool.sensation);
     const visual = document.querySelector("#dialogVisual");
-    visual.style.background = pool.zone === "shore" ? "#78ced4" : pool.zone === "current" ? "#efaa8e" : "#aaaee0";
+    visual.dataset.zone = pool.zone;
+    visual.classList.remove("is-changing");
+    requestAnimationFrame(() => visual.classList.add("is-changing"));
 
     document.querySelector("#dialogStory").textContent = pool.story;
     document.querySelector("#dialogBestFor").textContent = pool.bestFor;
@@ -443,6 +445,10 @@
     saveVisited();
     updateProgress();
     fillDialog(currentIndex);
+    dialog.querySelector("article")?.scrollTo({
+      top: 0,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"
+    });
     if (activeZone !== "all" && POOL_ITEMS[currentIndex].zone !== activeZone) applyZone("all");
     requestAnimationFrame(() => moveTraveler(currentIndex));
   }
