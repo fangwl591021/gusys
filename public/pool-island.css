@@ -378,64 +378,126 @@ main { width: min(100%, 900px); margin: 0 auto; overflow: hidden; }
 .zone-route {
   position: absolute;
   z-index: 0;
-  top: 94px;
-  bottom: 20px;
+  top: 112px;
+  bottom: 36px;
   left: 50%;
-  width: 4px;
-  background: repeating-linear-gradient(180deg, rgba(255,255,255,.86) 0 11px, transparent 11px 23px);
+  width: 0;
+  border-left: 3px dashed rgba(255,255,255,.74);
 }
-.pool-grid { position: relative; z-index: 2; display: grid; gap: 20px; width: min(100%, 650px); margin: 0 auto; }
-.pool-stop { display: flex; min-height: 112px; align-items: center; }
-.pool-stop:nth-child(even) { justify-content: flex-end; }
+.pool-grid {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 24px 14px;
+  width: min(100%, 680px);
+  margin: 0 auto;
+}
+.pool-stop { min-width: 0; }
 .pool-node {
   position: relative;
-  display: grid;
-  grid-template-columns: 62px minmax(0,1fr);
-  gap: 12px;
-  align-items: center;
-  width: min(84%, 360px);
-  min-height: 100px;
-  padding: 13px;
-  border: 2px solid rgba(6,63,69,.7);
-  border-radius: 8px;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
   color: var(--ink);
-  text-align: left;
-  background: #fffdf5;
-  box-shadow: var(--shadow);
+  text-align: center;
+  background: transparent;
 }
-.pool-node::after {
+.pool-node:focus-visible { outline: 4px solid var(--yellow); outline-offset: 4px; border-radius: 8px; }
+.pond-water {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1.38 / 1;
+  overflow: hidden;
+  border: 7px solid #e6f4c9;
+  border-radius: 50%;
+  background: #56b8c7;
+  box-shadow: inset 0 -16px 0 rgba(4,92,100,.13), 0 9px 0 #37805b, 0 14px 24px rgba(5,70,74,.20);
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.pool-node:hover .pond-water { transform: translateY(-3px); box-shadow: inset 0 -16px 0 rgba(4,92,100,.13), 0 11px 0 #37805b, 0 18px 28px rgba(5,70,74,.24); }
+.zone-current .pond-water { border-color: #ffe1c3; background: #63b7c4; }
+.zone-lagoon .pond-water { border-color: #e5e1ff; background: #5db0c7; }
+.pond-water::before {
   content: "";
   position: absolute;
-  z-index: -1;
-  right: -16px;
-  bottom: -9px;
-  width: 44px;
-  height: 20px;
+  left: 12%;
+  top: 15%;
+  width: 38%;
+  height: 22%;
+  border: 2px solid rgba(255,255,255,.58);
   border-radius: 50%;
-  background: #398a63;
-  transform: rotate(-10deg);
 }
-.pool-stop:nth-child(even) .pool-node::after { right: auto; left: -16px; }
-.pool-node:focus-visible { outline: 4px solid var(--yellow); outline-offset: 3px; }
+.pond-water::after {
+  content: "";
+  position: absolute;
+  right: 10%;
+  bottom: 14%;
+  width: 28%;
+  height: 17%;
+  border: 2px solid rgba(255,255,255,.45);
+  border-radius: 50%;
+}
+.pond-ripple { position: absolute; left: 43%; top: 42%; width: 32%; height: 18%; border: 2px solid rgba(255,255,255,.5); border-radius: 50%; }
 .pool-marker {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  left: 8px;
   display: grid;
-  width: 62px;
-  height: 62px;
+  width: 42px;
+  height: 42px;
   place-items: center;
-  border: 5px solid #d9f5e4;
+  border: 3px solid #fff;
   border-radius: 50%;
   color: #fff;
   background: var(--green);
-  font-size: 17px;
+  box-shadow: 0 5px 12px rgba(0,35,42,.22);
+  font-size: 12px;
   font-weight: 900;
 }
-.zone-current .pool-marker { background: #b84f40; border-color: #ffe0d8; }
-.zone-lagoon .pool-marker { background: #595da0; border-color: #e4e4ff; }
-.pool-name { display: block; margin-bottom: 4px; font-size: 17px; font-weight: 900; line-height: 1.25; }
-.pool-meta { display: block; color: var(--muted); font-size: 12px; line-height: 1.4; }
-.pool-state { display: none; margin-top: 7px; color: var(--green); font-size: 11px; font-weight: 900; }
-.pool-node.is-visited .pool-state { display: block; }
-.pool-node.is-current { border-color: #ff9b31; box-shadow: 0 0 0 4px rgba(255,209,93,.92), var(--shadow); }
+.zone-current .pool-marker { background: #b84f40; }
+.zone-lagoon .pool-marker { background: #595da0; }
+.pond-fish {
+  position: absolute;
+  z-index: 2;
+  width: 30px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--yellow);
+  transform-origin: center;
+}
+.pond-fish::before { content: ""; position: absolute; left: -8px; top: 2px; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-right: 9px solid currentColor; color: var(--yellow); }
+.pond-fish::after { content: ""; position: absolute; right: 5px; top: 4px; width: 3px; height: 3px; border-radius: 50%; background: var(--deep); }
+.pond-fish-1 { left: 24%; top: 36%; transform: rotate(8deg); }
+.pond-fish-2 { right: 17%; top: 28%; transform: rotate(-7deg) scale(.72); background: var(--coral); }
+.pond-fish-2::before { color: var(--coral); }
+.pond-fish-3 { left: 42%; bottom: 23%; transform: rotate(-4deg) scale(.58); background: #fff2b5; }
+.pond-fish-3::before { color: #fff2b5; }
+.pond-fish-4 { right: 10%; bottom: 20%; transform: rotate(10deg) scale(.48); background: #4c729a; }
+.pond-fish-4::before { color: #4c729a; }
+.pool-copy { display: block; min-height: 66px; padding: 13px 5px 0; }
+.pool-name { display: block; margin-bottom: 5px; font-size: 17px; font-weight: 900; line-height: 1.25; }
+.pool-meta { display: block; color: #315b62; font-size: 12px; line-height: 1.4; }
+.pool-state {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  right: 8px;
+  display: none;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 13px;
+  color: #fff;
+  background: var(--green);
+  font-size: 10px;
+  font-weight: 900;
+}
+.pool-node.is-visited .pool-state { display: inline-flex; }
+.pool-node.is-current .pond-water { box-shadow: inset 0 -16px 0 rgba(4,92,100,.13), 0 9px 0 #37805b, 0 0 0 5px var(--yellow), 0 18px 28px rgba(5,70,74,.28); }
 .traveler {
   position: absolute;
   z-index: 12;
@@ -494,17 +556,18 @@ main { width: min(100%, 900px); margin: 0 auto; overflow: hidden; }
 .source-note a { color: var(--green); font-size: 12px; font-weight: 800; }
 
 .pool-dialog {
-  width: min(calc(100% - 28px), 540px);
-  max-height: calc(100dvh - 28px);
+  width: min(calc(100% - 16px), 620px);
+  max-height: calc(100dvh - 16px);
+  margin: auto auto max(8px, env(safe-area-inset-bottom));
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 8px 8px 0 0;
   color: var(--ink);
   background: #fff;
   box-shadow: 0 24px 70px rgba(10,30,40,.34);
 }
 .pool-dialog::backdrop { background: rgba(4,25,35,.62); backdrop-filter: blur(3px); }
-.pool-dialog article { position: relative; overflow-y: auto; max-height: calc(100dvh - 28px); padding: 0 22px 20px; }
+.pool-dialog article { position: relative; overflow-y: auto; max-height: calc(100dvh - 16px); padding: 0 20px 20px; }
 .dialog-close {
   position: absolute;
   z-index: 3;
@@ -520,7 +583,7 @@ main { width: min(100%, 900px); margin: 0 auto; overflow: hidden; }
   background: rgba(255,255,255,.9);
   font-size: 24px;
 }
-.dialog-visual { position: relative; height: 132px; margin: 0 -22px 20px; overflow: hidden; background: var(--aqua); }
+.dialog-visual { position: relative; height: 180px; margin: 0 -20px 22px; overflow: hidden; background: var(--aqua); }
 .dialog-visual::before { content: ""; position: absolute; left: -20px; right: -20px; bottom: -45px; height: 85px; border-radius: 50%; background: #5a9d72; }
 .dialog-fish { position: absolute; width: 46px; height: 23px; border-radius: 50%; background: var(--yellow); }
 .dialog-fish::before { content: ""; position: absolute; left: -13px; top: 4px; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-right: 15px solid currentColor; color: var(--yellow); }
@@ -531,15 +594,30 @@ main { width: min(100%, 900px); margin: 0 auto; overflow: hidden; }
 .fish-c { top: 18px; right: 10%; transform: scale(.55); background: var(--violet); }
 .fish-c::before { color: var(--violet); }
 .dialog-number { margin: 0 0 6px; color: var(--green); font-size: 12px; font-weight: 900; }
-.pool-dialog h2 { margin: 0 42px 8px 0; font-size: 27px; }
-.dialog-lead { margin: 0 0 14px; color: var(--muted); line-height: 1.65; }
+.pool-dialog h2 { margin: 0 42px 8px 0; font-size: 30px; }
+.dialog-lead { margin: 0 0 13px; color: var(--muted); font-size: 14px; line-height: 1.65; }
+.dialog-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 13px; }
+.dialog-tags span { min-height: 28px; padding: 5px 10px; border: 1px solid #bcd9cd; border-radius: 14px; color: var(--green); background: #f5fbf8; font-size: 11px; font-weight: 900; }
 .sensation { display: flex; gap: 5px; align-items: center; margin-bottom: 16px; }
 .sensation span { width: 26px; height: 7px; border-radius: 4px; background: #dce7e2; }
 .sensation span.is-on { background: var(--coral); }
 .sensation em { margin-left: 6px; color: var(--muted); font-size: 11px; font-style: normal; }
-.pool-dialog dl { display: grid; grid-template-columns: 74px minmax(0,1fr); gap: 10px 12px; margin: 0; padding: 16px 0; border-block: 1px solid var(--line); }
-.pool-dialog dt { color: var(--muted); font-size: 13px; }
-.pool-dialog dd { margin: 0; font-size: 14px; font-weight: 700; line-height: 1.5; }
+.dialog-story { margin: 0 -20px; padding: 20px; border-block: 1px solid var(--line); background: #f2f8f5; }
+.dialog-kicker { margin: 0 0 4px; color: var(--green); font-size: 10px; font-weight: 900; letter-spacing: .09em; }
+.dialog-story h3, .dialog-guide h3 { margin: 0 0 7px; font-size: 17px; }
+.dialog-story > p:last-child, .dialog-guide p { margin: 0; color: #40545e; font-size: 13px; line-height: 1.7; }
+.dialog-guide { display: grid; gap: 0; margin: 0 -20px; }
+.dialog-guide section { position: relative; padding: 19px 20px 19px 62px; border-bottom: 1px solid var(--line); }
+.guide-number { position: absolute; top: 18px; left: 20px; color: var(--coral); font-size: 13px; font-weight: 900; }
+.dialog-caution { margin: 18px 0 0; padding: 15px 16px; border-left: 5px solid var(--coral); background: #fff1ed; }
+.dialog-caution strong { display: block; margin-bottom: 5px; color: #9d3f31; font-size: 13px; }
+.dialog-caution p { margin: 0; color: #694842; font-size: 13px; line-height: 1.6; }
+.dialog-mission { display: grid; gap: 5px; margin: 14px 0 0; padding: 16px; color: #fff; background: var(--deep); }
+.dialog-mission span { color: #8ce6c3; font-size: 10px; font-weight: 900; letter-spacing: .08em; }
+.dialog-mission strong { font-size: 14px; line-height: 1.55; }
+.dialog-source { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 15px 2px; border-bottom: 1px solid var(--line); }
+.dialog-source span { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.dialog-source a { flex: 0 0 auto; color: var(--green); font-size: 12px; font-weight: 900; }
 .dialog-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
 .dialog-actions button { min-height: 46px; border: 1px solid var(--green); border-radius: 7px; color: var(--green); background: #fff; font-weight: 900; }
@@ -563,6 +641,9 @@ footer p { margin: 4px 0 0; color: #c9d5df; font-size: 12px; }
   .visit-guide { grid-template-columns: 170px minmax(0,1fr); padding: 40px 44px; }
   .visit-guide img { width: 170px; }
   .source-note { padding: 24px 44px; }
+  .pool-dialog { margin: auto; border-radius: 8px; }
+  .dialog-guide { grid-template-columns: 1fr 1fr; }
+  .dialog-guide section + section { border-left: 1px solid var(--line); }
 }
 
 @media (prefers-reduced-motion: reduce) {

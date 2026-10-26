@@ -7,7 +7,7 @@
   <title>魚池島｜重口味溫泉魚</title>
   <meta name="description" content="走進魚池島，用擲骰與互動地圖探索重口味溫泉魚的 12 個特色池區。">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23067a62'/%3E%3Cpath d='M7 17c5-7 11-7 16-2l3-3v8l-3-3c-5 5-11 5-16 0Z' fill='white'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/pool-island.css?v=20261026-2">
+  <link rel="stylesheet" href="/pool-island.css?v=20261026-3">
 </head>
 <body>
   <header class="topbar">
@@ -134,9 +134,38 @@
       <p class="dialog-number" id="dialogNumber"></p>
       <h2 id="dialogTitle"></h2>
       <p class="dialog-lead" id="dialogLead"></p>
+      <div class="dialog-tags" id="dialogTags"></div>
       <div class="sensation" id="dialogSensation"></div>
-      <dl id="dialogFacts"></dl>
-      <p class="dialog-note">每個人的敏感度與當日魚群狀況不同；覺得不舒服時請立即把腳移開，並詢問現場工作人員。</p>
+      <section class="dialog-story">
+        <p class="dialog-kicker">POOL STORY</p>
+        <h3>這一池有什麼特色？</h3>
+        <p id="dialogStory"></p>
+      </section>
+      <div class="dialog-guide">
+        <section>
+          <span class="guide-number">01</span>
+          <h3>適合誰先試</h3>
+          <p id="dialogBestFor"></p>
+        </section>
+        <section>
+          <span class="guide-number">02</span>
+          <h3>建議怎麼玩</h3>
+          <p id="dialogHowTo"></p>
+        </section>
+      </div>
+      <section class="dialog-caution">
+        <strong>先看提醒</strong>
+        <p id="dialogCaution"></p>
+      </section>
+      <section class="dialog-mission">
+        <span>本池探索任務</span>
+        <strong id="dialogMission"></strong>
+      </section>
+      <div class="dialog-source">
+        <span id="dialogSourceLabel"></span>
+        <a id="dialogSourceLink" href="#" target="_blank" rel="noopener noreferrer">查看公開紀錄</a>
+      </div>
+      <p class="dialog-note">池名、魚種與配置可能依現場調整。每個人的敏感度與當日魚群狀況不同；覺得不舒服時請立即把腳移開。</p>
       <div class="dialog-actions">
         <button id="previousPool" type="button">上一站</button>
         <button id="nextPool" type="button">下一站</button>
@@ -152,6 +181,6 @@
   </footer>
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script>
-  <script src="/pool-island.js?v=20261026-2" defer></script>
+  <script src="/pool-island.js?v=20261026-3" defer></script>
 </body>
 </html>

@@ -94,6 +94,111 @@
     }
   ];
 
+  const SOURCE_RECENT = "https://qpjj.tw/%E3%80%90%E7%A4%81%E6%BA%AA%E3%80%91%E9%87%8D%E5%8F%A3%E5%91%B3%E6%BA%AB%E6%B3%89%E9%AD%9A-%E7%A4%81%E6%BA%AA%E6%9C%80%E5%A4%9A%E5%85%83%E7%9A%84%E6%BA%AB%E6%B3%89%E9%AD%9A%E6%B3%A1%E8%85%B3/";
+  const SOURCE_OVERVIEW = "https://www.abic.com.tw/place/view/id/15261";
+  const SOURCE_CLASSIC = "https://fgblog.fashionguide.com.tw/12728/posts/295160";
+
+  const POOL_DETAILS = {
+    junior: {
+      traits: ["第一次推薦", "小型魚群", "親子同行"],
+      story: "幼幼班不是比速度的關卡，而是讓第一次接觸魚群的人先理解水中動態。魚靠近時先不要快速抽腳，觀察幾秒鐘，通常比直接挑戰大魚更容易建立自己的節奏。",
+      bestFor: "第一次體驗、比較怕癢，或想陪孩子先觀察魚群的人。",
+      howTo: "先坐穩再把雙腳慢慢放入；停留十多秒，確認可以接受後再延長。",
+      caution: "兒童需由成人陪同。不要踢水、追魚，也不要在池內站立。",
+      sourceUrl: SOURCE_OVERVIEW
+    },
+    "pool-01": {
+      traits: ["朱文錦", "魚群數量感", "入門比較"],
+      story: "「小淘氣」的看點不是單一大魚，而是一群朱文錦聚集時形成的動態。公開走訪資料把它列為 1 號池，適合拿來建立後續比較基準：先記住這一池，再往下一站感受差異。",
+      bestFor: "已經適應幼幼班，想開始比較不同池區的人。",
+      howTo: "腳尖先入水，再慢慢放下腳底；用相同停留時間和下一池比較。",
+      caution: "魚群體型較小，入水動作要輕，避免突然踩踏或驚嚇魚群。",
+      sourceUrl: SOURCE_RECENT
+    },
+    "pool-02": {
+      traits: ["小旋風", "體型變化", "輕鬆比較"],
+      story: "小旋風的名字很有速度感，但公開體驗紀錄也提醒：魚看起來較大，不代表每個人都會覺得更強。這一池最適合用來發現「外觀看起來」和「自己實際感覺」未必相同。",
+      bestFor: "想從小魚群慢慢往上比較，又不想一次跳太多的人。",
+      howTo: "左右腳輪流入水，觀察兩腳敏感度是否不同，再決定是否同時體驗。",
+      caution: "不要用別人的反應判斷自己；感覺不舒服就直接移開。",
+      sourceUrl: SOURCE_RECENT
+    },
+    "pool-03": {
+      traits: ["黑旋風", "進階前哨", "感受比較"],
+      story: "黑旋風是淺灘區最後一站。公開紀錄將它排在小旋風之後，適合做為進入重口味區前的確認點：如果這一池已經太明顯，就不需要勉強往更高階前進。",
+      bestFor: "已走過 1、2 號池，想確認自己是否適合繼續挑戰的人。",
+      howTo: "先短暫停留，等身體適應後再決定要繼續、換池或回到前一站。",
+      caution: "不必完成全部池區。選出適合自己的池，比挑戰數量更重要。",
+      sourceUrl: SOURCE_RECENT
+    },
+    "pool-04": {
+      traits: ["狠角色", "接觸明顯", "短暫試水"],
+      story: "「狠角色」已經進入湧流挑戰區。它的現場命名就是提醒訪客不要只顧著拍照或逞強；先用短時間試水，比一次停留太久更容易掌握自己的界線。",
+      bestFor: "已適應前段池區，且想試試更清楚接觸感的人。",
+      howTo: "先用腳底接觸，十秒內確認感受；腳背較敏感時不要長時間停留。",
+      caution: "有明顯不適、刺痛或緊張時立即離池，不要為了拍攝而硬撐。",
+      sourceUrl: SOURCE_RECENT
+    },
+    "pool-05": {
+      traits: ["大隻佬", "重口味代表", "量力而為"],
+      story: "完整池名在近期紀錄中寫作「重口味餓勢力大隻佬」，是店內最有記憶點的挑戰池之一。它適合看、適合認識，但不代表每位訪客都必須完成。",
+      bestFor: "已經確認自己能接受明顯接觸感，並願意短暫嘗試的成人。",
+      howTo: "只做短時間體驗，先試一隻腳；確認舒適後才考慮繼續。",
+      caution: "這一池不是耐力比賽。兒童、敏感或緊張者可直接跳過。",
+      sourceUrl: SOURCE_RECENT
+    },
+    "pool-06": {
+      traits: ["大型魚", "台灣鯛／紅尼羅", "視覺焦點"],
+      story: "吸癢癢最吸睛的是大型魚群靠近腳邊的畫面。近期公開紀錄將魚種寫為台灣鯛／紅尼羅；視覺上很有壓迫感，但感受仍不能只靠體型推測。",
+      bestFor: "想觀察大型魚互動，或已經走完前段路線的人。",
+      howTo: "先在池邊觀察魚群，再慢慢入水；讓魚自然靠近，不要伸手抓取。",
+      caution: "大型魚靠近時不要突然站起或踢水，以免自己滑倒也驚嚇魚群。",
+      sourceUrl: SOURCE_RECENT
+    },
+    senior: {
+      traits: ["趣味池牌", "資深員工", "現場確認"],
+      story: "「啃老族／資深員工」是過往公開照片與旅遊資料記錄過的趣味池名。這類名稱會隨現場魚群與池牌調整，探索重點是先讀懂當天說明，而不是照舊資料硬找同一位置。",
+      bestFor: "喜歡看現場趣味命名、已懂得依池牌判斷的人。",
+      howTo: "先閱讀當日池牌的魚種與提醒，再按照現場人員建議決定是否入池。",
+      caution: "網路資料只作為導覽線索；現場標示永遠優先。",
+      sourceUrl: SOURCE_OVERVIEW
+    },
+    red: {
+      traits: ["紅色魚群", "特色命名", "無編號池"],
+      story: "紅孩兒是公開紀錄中的無編號特色池名，視覺辨識度來自魚群外觀。它不一定固定出現在同一位置，因此到店後應把它當成尋寶題目，而不是固定關卡。",
+      bestFor: "喜歡觀察魚色、拍攝水中動態，或想逛主題池的人。",
+      howTo: "先看魚群外觀與游動方向，再以短時間接觸確認自己的感受。",
+      caution: "拍照時請拿穩手機，避免伸到池面上方或影響其他客人。",
+      sourceUrl: SOURCE_RECENT
+    },
+    gold: {
+      traits: ["金色魚群", "主題池", "外觀觀察"],
+      story: "黃金貴族的名稱來自魚群鮮明的金色印象。公開紀錄跨越不同年份仍可看到這個名稱，但魚種與配置可能更新，因此頁面不使用舊照片冒充目前現場。",
+      bestFor: "偏好先觀察外觀，再決定是否入池的訪客。",
+      howTo: "從側邊觀察魚群聚集方式，再選擇坐位，避免跨越池區。",
+      caution: "不要餵食、觸摸或把任何物品丟入池中。",
+      sourceUrl: SOURCE_CLASSIC
+    },
+    blue: {
+      traits: ["藍天使", "主題命名", "動態觀察"],
+      story: "藍天使是舊有與近期公開走訪都提過的特色池名之一。名稱保留店家的幽默與辨識度，但實際感受仍會因魚群狀況和個人敏感度而不同。",
+      bestFor: "已完成基本池區，想繼續蒐集特色池名的人。",
+      howTo: "先保持雙腳不動，觀察魚群靠近的速度，再決定停留時間。",
+      caution: "坐位與走道可能有水，移動到下一池前先擦乾並慢慢起身。",
+      sourceUrl: SOURCE_CLASSIC
+    },
+    spring: {
+      traits: ["無魚池", "溫泉轉場", "休息站"],
+      story: "公開走訪曾記錄一座沒有魚的碳酸氫鈉溫泉池。它在整段路線中扮演休息與轉場角色，讓訪客暫停比較魚群，重新決定下一站要回到入門區還是繼續探索。",
+      bestFor: "想稍作休息，或暫時不想與魚群互動的人。",
+      howTo: "先確認現場是否開放與水溫，再依店內規定使用。",
+      caution: "本頁不保證該池每日開放；水溫與使用方式以現場標示為準。",
+      sourceUrl: SOURCE_RECENT
+    }
+  };
+
+  POOL_ITEMS.forEach((pool) => Object.assign(pool, POOL_DETAILS[pool.id]));
+
   const STORAGE_KEY = "gusys_pool_island_progress_v2";
   const diceFaces = ["●", "••", "∴", "∷", "⁙", "⠿"];
   const visited = new Set(loadVisited());
@@ -162,10 +267,21 @@
         button.dataset.index = String(poolIndex);
         button.setAttribute("aria-label", `查看${pool.title}`);
 
+        const pond = document.createElement("span");
+        pond.className = "pond-water";
         const marker = document.createElement("span");
         marker.className = "pool-marker";
         marker.textContent = pool.marker;
+        const ripple = document.createElement("span");
+        ripple.className = "pond-ripple";
+        pond.append(marker, ripple);
+        for (let fishIndex = 0; fishIndex < 4; fishIndex += 1) {
+          const fish = document.createElement("span");
+          fish.className = `pond-fish pond-fish-${fishIndex + 1}`;
+          pond.append(fish);
+        }
         const nodeCopy = document.createElement("span");
+        nodeCopy.className = "pool-copy";
         const name = document.createElement("span");
         const meta = document.createElement("span");
         const state = document.createElement("span");
@@ -176,7 +292,7 @@
         meta.textContent = pool.subtitle;
         state.textContent = "✓ 已探索";
         nodeCopy.append(name, meta, state);
-        button.append(marker, nodeCopy);
+        button.append(pond, nodeCopy);
         button.addEventListener("click", () => visitPool(poolIndex, true));
         stop.append(button);
         grid.append(stop);
@@ -210,9 +326,9 @@
     const node = document.querySelector(`.pool-node[data-index="${index}"]`);
     if (!node || node.closest(".zone")?.hidden) return;
     const mapRect = islandWorld.getBoundingClientRect();
-    const nodeRect = node.getBoundingClientRect();
-    traveler.style.top = `${nodeRect.top - mapRect.top + nodeRect.height / 2 - 28}px`;
-    traveler.style.left = `${nodeRect.left - mapRect.left + nodeRect.width / 2 - 28}px`;
+    const pondRect = node.querySelector(".pond-water").getBoundingClientRect();
+    traveler.style.top = `${pondRect.top - mapRect.top + pondRect.height / 2 - 28}px`;
+    traveler.style.left = `${pondRect.left - mapRect.left + pondRect.width / 2 - 28}px`;
   }
 
   function renderSensation(level) {
@@ -234,19 +350,24 @@
     document.querySelector("#dialogNumber").textContent = `${zone.title} · ${pool.marker}`;
     document.querySelector("#dialogTitle").textContent = pool.title;
     document.querySelector("#dialogLead").textContent = pool.lead;
+    const tags = document.querySelector("#dialogTags");
+    tags.replaceChildren();
+    pool.traits.forEach((trait) => {
+      const tag = document.createElement("span");
+      tag.textContent = trait;
+      tags.append(tag);
+    });
     renderSensation(pool.sensation);
     const visual = document.querySelector("#dialogVisual");
     visual.style.background = pool.zone === "shore" ? "#78ced4" : pool.zone === "current" ? "#efaa8e" : "#aaaee0";
 
-    const facts = document.querySelector("#dialogFacts");
-    facts.replaceChildren();
-    [["公開魚種", pool.fish], ["探索定位", pool.level], ["這站任務", pool.task], ["資料依據", pool.source]].forEach(([term, value]) => {
-      const dt = document.createElement("dt");
-      const dd = document.createElement("dd");
-      dt.textContent = term;
-      dd.textContent = value;
-      facts.append(dt, dd);
-    });
+    document.querySelector("#dialogStory").textContent = pool.story;
+    document.querySelector("#dialogBestFor").textContent = pool.bestFor;
+    document.querySelector("#dialogHowTo").textContent = pool.howTo;
+    document.querySelector("#dialogCaution").textContent = pool.caution;
+    document.querySelector("#dialogMission").textContent = pool.task;
+    document.querySelector("#dialogSourceLabel").textContent = `${pool.fish} · ${pool.source}`;
+    document.querySelector("#dialogSourceLink").href = pool.sourceUrl;
   }
 
   function openDialog(index) {
