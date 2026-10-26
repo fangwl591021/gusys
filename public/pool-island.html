@@ -3,95 +3,155 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#ecf8f2">
+  <meta name="theme-color" content="#063f45">
   <title>魚池島｜重口味溫泉魚</title>
-  <meta name="description" content="用擲骰探索方式認識重口味溫泉魚的 12 個互動池區。">
+  <meta name="description" content="走進魚池島，用擲骰與互動地圖探索重口味溫泉魚的 12 個特色池區。">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23067a62'/%3E%3Cpath d='M7 17c5-7 11-7 16-2l3-3v8l-3-3c-5 5-11 5-16 0Z' fill='white'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/pool-island.css?v=20261026-1">
+  <link rel="stylesheet" href="/pool-island.css?v=20261026-2">
 </head>
 <body>
   <header class="topbar">
     <button class="icon-button" id="backButton" type="button" aria-label="返回上一頁" title="返回上一頁">‹</button>
-    <div>
-      <p class="eyebrow">重口味溫泉魚</p>
-      <h1>魚池島</h1>
-    </div>
+    <a class="brand" href="#top" aria-label="魚池島首頁">
+      <span>重口味溫泉魚</span>
+      <strong>魚池島</strong>
+    </a>
     <button class="icon-button" id="closeButton" type="button" aria-label="關閉頁面" title="關閉頁面">×</button>
   </header>
 
-  <main>
-    <section class="intro" aria-labelledby="introTitle">
-      <div>
-        <p class="eyebrow">POOL ISLAND</p>
-        <h2 id="introTitle">一座島，12 種互動感受</h2>
-        <p>擲骰前進或直接點選池區，先認識各池特色，再依現場開放狀況自由體驗。</p>
+  <main id="top">
+    <section class="hero" aria-labelledby="heroTitle">
+      <div class="hero-water" aria-hidden="true">
+        <span class="ripple ripple-one"></span>
+        <span class="ripple ripple-two"></span>
+        <span class="fish fish-one"></span>
+        <span class="fish fish-two"></span>
+        <span class="reed reed-one"></span>
+        <span class="reed reed-two"></span>
       </div>
-      <div class="progress-box" aria-live="polite">
-        <strong id="visitedCount">0 / 12</strong>
-        <span>已探索池區</span>
+      <div class="hero-copy">
+        <p class="eyebrow">POOL ISLAND · 互動導覽</p>
+        <h1 id="heroTitle">沿著水路<br>遇見 12 種感受</h1>
+        <p>從入門小魚到重口味大魚，先看池區特色，再用自己的步調挑戰。</p>
+        <div class="hero-actions">
+          <button class="primary-action" id="heroRollButton" type="button"><span aria-hidden="true">⚄</span> 擲骰出發</button>
+          <a href="#fieldVideo">先看現場實拍</a>
+        </div>
       </div>
+      <dl class="hero-stats">
+        <div><dt>12</dt><dd>探索池區</dd></div>
+        <div><dt>3</dt><dd>主題水域</dd></div>
+        <div><dt id="heroVisited">0</dt><dd>已完成</dd></div>
+      </dl>
     </section>
 
-    <section class="controls" aria-label="探索控制">
+    <section class="mission" aria-label="探索進度">
+      <div class="mission-copy">
+        <p class="eyebrow">TODAY'S ROUTE</p>
+        <h2>你的魚池探索進度</h2>
+        <p id="missionText">尚未出發，先擲骰或點選任一池區。</p>
+      </div>
+      <div class="progress-ring" id="progressRing" aria-label="已探索 0 個池區">
+        <strong id="visitedCount">0</strong><span>/ 12</span>
+      </div>
+      <button class="reset-button" id="resetButton" type="button">重置</button>
+    </section>
+
+    <section class="control-dock" aria-label="探索控制">
       <button class="roll-button" id="rollButton" type="button">
         <span class="dice" id="diceFace" aria-hidden="true">●</span>
-        <span><strong>擲骰探索</strong><small id="rollHint">帶我前往下一個池區</small></span>
+        <span><strong>擲骰探索</strong><small id="rollHint">沿水路前往下一站</small></span>
       </button>
-      <button class="sound-button" id="soundButton" type="button" aria-pressed="true" title="切換音效">♪</button>
+      <button class="sound-button" id="soundButton" type="button" aria-pressed="true" title="切換音效" aria-label="切換音效">♪</button>
     </section>
 
-    <nav class="filters" aria-label="池區篩選">
-      <button class="filter is-active" type="button" data-filter="all">全部</button>
-      <button class="filter" type="button" data-filter="gentle">初次體驗</button>
-      <button class="filter" type="button" data-filter="01-04">01–04</button>
-      <button class="filter" type="button" data-filter="05-08">05–08</button>
-      <button class="filter" type="button" data-filter="09-11">09–11</button>
+    <nav class="zone-tabs" aria-label="池區篩選">
+      <button class="zone-tab is-active" type="button" data-zone="all">全島</button>
+      <button class="zone-tab" type="button" data-zone="shore"><span class="zone-dot shore-dot"></span>淺灘入門</button>
+      <button class="zone-tab" type="button" data-zone="current"><span class="zone-dot current-dot"></span>湧流挑戰</button>
+      <button class="zone-tab" type="button" data-zone="lagoon"><span class="zone-dot lagoon-dot"></span>彩鱗主題</button>
     </nav>
 
-    <section class="island-section" aria-labelledby="mapTitle">
-      <div class="section-heading">
-        <div><p class="eyebrow">互動地圖</p><h2 id="mapTitle">沿著水路逛每個池區</h2></div>
-        <span>點池區可直接查看</span>
+    <section class="map-section" aria-labelledby="mapTitle">
+      <div class="map-heading">
+        <div><p class="eyebrow">INTERACTIVE MAP</p><h2 id="mapTitle">魚池島探索地圖</h2></div>
+        <p>池名依公開現場紀錄整理，實際配置與開放狀況以店內標示為準。</p>
       </div>
-      <div class="island-map" id="islandMap">
-        <div class="water-current" aria-hidden="true"></div>
-        <div class="traveler" id="traveler" aria-hidden="true"><span>🐟</span></div>
-        <div class="pool-list" id="poolList"></div>
+      <div class="island-world" id="islandWorld">
+        <div class="map-compass" aria-hidden="true"><strong>N</strong><span></span></div>
+        <div class="traveler" id="traveler" aria-hidden="true"><span class="traveler-fish"></span></div>
+        <div id="zoneList"></div>
       </div>
     </section>
 
-    <section class="notice" aria-labelledby="noticeTitle">
-      <img src="/assets/pool-hygiene-guide-v2.png" alt="入池衛生與安全須知圖">
-      <div>
-        <p class="eyebrow">入池前先知道</p>
-        <h2 id="noticeTitle">直接脫鞋襪即可體驗</h2>
-        <p>若腳上有沙泥或乳液，請先清潔；離開體驗區後請洗腳。實際使用方式依現場人員指引。</p>
-        <a href="/faq.html">查看完整常見問題</a>
+    <section class="field-video" id="fieldVideo" aria-labelledby="videoTitle">
+      <div class="video-copy">
+        <p class="eyebrow">FIELD FOOTAGE</p>
+        <h2 id="videoTitle">先看別人怎麼挑戰</h2>
+        <p>創作者實際走訪礁溪重口味溫泉魚。影片不下載、不重製，透過 YouTube 官方播放器呈現。</p>
+        <a href="/media-wall.html">前往完整媒體影音牆</a>
+      </div>
+      <div class="video-frame" id="videoFrame">
+        <button class="video-poster" id="videoPoster" type="button" aria-label="開啟黑仔熊的礁溪重口味溫泉魚實拍播放器">
+          <img src="https://i.ytimg.com/vi/baV_VKE4QMY/hqdefault.jpg" alt="黑仔熊實際走訪礁溪重口味溫泉魚影片縮圖" loading="lazy">
+          <span class="play-symbol" aria-hidden="true">▶</span>
+          <strong>開啟現場實拍</strong>
+        </button>
       </div>
     </section>
+
+    <section class="visit-guide" aria-labelledby="guideTitle">
+      <img src="/assets/pool-hygiene-guide-v2.png" alt="重口味溫泉魚入池衛生與安全須知圖">
+      <div>
+        <p class="eyebrow">BEFORE YOU PLAY</p>
+        <h2 id="guideTitle">入池前，先看 4 件事</h2>
+        <ul>
+          <li>直接脫鞋襪即可；若有沙泥或乳液，請先清潔。</li>
+          <li>池內不要站立、踩踏、抓魚或自行餵食。</li>
+          <li>兒童請由家長陪同，走道濕滑時放慢腳步。</li>
+          <li>離開體驗區後請洗腳，隨身物品請自行保管。</li>
+        </ul>
+        <a href="/faq.html">查看完整 FAQ</a>
+      </div>
+    </section>
+
+    <aside class="source-note">
+      <strong>內容說明</strong>
+      <p>池名與魚種參考店家公開粉絲專頁及公開旅遊紀錄交叉整理；魚群、名稱與開放池區可能調整。本頁只介紹休閒互動體驗，不提供醫療或保健效果宣稱。</p>
+      <div>
+        <a href="https://www.facebook.com/YiLan.Dr.Fish/" target="_blank" rel="noopener noreferrer">店家粉絲專頁</a>
+        <a href="https://www.abic.com.tw/place/view/id/15261" target="_blank" rel="noopener noreferrer">公開池區紀錄</a>
+      </div>
+    </aside>
   </main>
 
   <dialog class="pool-dialog" id="poolDialog">
     <article>
       <button class="dialog-close" id="dialogClose" type="button" aria-label="關閉池區介紹">×</button>
+      <div class="dialog-visual" id="dialogVisual" aria-hidden="true">
+        <span class="dialog-fish fish-a"></span><span class="dialog-fish fish-b"></span><span class="dialog-fish fish-c"></span>
+      </div>
       <p class="dialog-number" id="dialogNumber"></p>
       <h2 id="dialogTitle"></h2>
       <p class="dialog-lead" id="dialogLead"></p>
+      <div class="sensation" id="dialogSensation"></div>
       <dl id="dialogFacts"></dl>
-      <p class="dialog-note">魚種、魚隻大小及開放狀況可能調整，請以現場標示與工作人員說明為準。</p>
+      <p class="dialog-note">每個人的敏感度與當日魚群狀況不同；覺得不舒服時請立即把腳移開，並詢問現場工作人員。</p>
       <div class="dialog-actions">
-        <button id="previousPool" type="button">上一池</button>
-        <button id="nextPool" type="button">下一池</button>
+        <button id="previousPool" type="button">上一站</button>
+        <button id="nextPool" type="button">下一站</button>
       </div>
     </article>
   </dialog>
 
   <footer>
-    <a href="tel:0985197664">聯絡店家 0985-197-664</a>
+    <strong>準備來魚池島了嗎？</strong>
+    <a href="https://www.google.com/maps/dir/?api=1&amp;destination=%E9%87%8D%E5%8F%A3%E5%91%B3%E6%BA%AB%E6%B3%89%E9%AD%9A%2C%E5%AE%9C%E8%98%AD%E7%B8%A3%E7%A4%81%E6%BA%AA%E9%84%89%E4%BB%81%E6%84%9B%E8%B7%AF23%E8%99%9F" target="_blank" rel="noopener noreferrer">從目前位置開始導航</a>
+    <a href="tel:0985197664">0985-197-664</a>
     <p>宜蘭縣礁溪鄉仁愛路 23 號</p>
   </footer>
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script>
-  <script src="/pool-island.js?v=20261026-1" defer></script>
+  <script src="/pool-island.js?v=20261026-2" defer></script>
 </body>
 </html>
