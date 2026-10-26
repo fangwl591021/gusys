@@ -3,48 +3,94 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#087f70">
+  <meta name="theme-color" content="#173f3a">
   <title>礁溪食宿遊購行群島｜重口味溫泉魚</title>
-  <link rel="stylesheet" href="/jiaoxi-islands.css?v=20261026-1">
+  <link rel="preload" href="/assets/jiaoxi-islands-map-v2.jpg" as="image">
+  <link rel="stylesheet" href="/jiaoxi-islands.css?v=20261026-3">
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script>
-  <script src="/jiaoxi-islands.js?v=20261026-2" defer></script>
+  <script src="/jiaoxi-islands.js?v=20261026-3" defer></script>
 </head>
 <body>
   <header class="topbar">
-    <div><span class="eyebrow">JIAOXI ISLANDS</span><h1>礁溪食宿遊購行群島</h1></div>
-    <button class="icon-button" id="soundToggle" aria-label="切換環境音" title="切換環境音">♪</button>
+    <a class="brand" href="#top" aria-label="回到群島首頁">
+      <span class="brand-mark">魚</span>
+      <span><small>重口味溫泉魚</small><strong>礁溪群島</strong></span>
+    </a>
+    <button class="icon-button" id="soundToggle" aria-label="暫停頁面動態" title="暫停頁面動態">Ⅱ</button>
   </header>
-  <main>
-    <section class="intro" aria-labelledby="introTitle">
-      <div class="intro-copy"><p class="kicker">以本店為中心，直接安排下一站</p><h2 id="introTitle">從重口味溫泉魚出發<br>逛五座礁溪主題島</h2><p>不必抽卡或等待。點島看店家、加入行程，再用手機目前位置精準導航。</p></div>
-      <div class="home-island" aria-label="重口味溫泉魚中心島"><span class="home-pin">本店</span><strong>重口味溫泉魚</strong><small>宜蘭縣礁溪鄉仁愛路23號</small><i class="ripple r1"></i><i class="ripple r2"></i></div>
+
+  <main id="top">
+    <section class="map-hero" aria-labelledby="heroTitle">
+      <div class="map-shade" aria-hidden="true"></div>
+      <div class="hero-copy">
+        <span class="eyebrow">JIAOXI ISLANDS</span>
+        <p class="hero-index">01 / EXPLORE</p>
+        <h1 id="heroTitle">今天，從一池魚<br>逛到整個礁溪</h1>
+        <p>以重口味溫泉魚為起點，串起食、宿、遊、購、行五座主題島。</p>
+      </div>
+      <div class="map-pins" id="mapPins" aria-label="主題島快速入口"></div>
+      <button class="home-node" id="homeNode" type="button" aria-label="查看重口味溫泉魚位置">
+        <span class="home-pulse"></span>
+        <span class="home-dot">本店</span>
+        <span class="home-label"><strong>重口味溫泉魚</strong><small>所有路線從這裡出發</small></span>
+      </button>
+      <div class="hero-route route-one" aria-hidden="true"></div>
+      <div class="hero-route route-two" aria-hidden="true"></div>
+      <a class="hero-cta" href="#destinations"><span>開始逛島</span><b aria-hidden="true">↓</b></a>
     </section>
 
     <nav class="category-tabs" id="categoryTabs" aria-label="食宿遊購行分類"></nav>
 
-    <section class="world" id="world" aria-live="polite">
-      <div class="sea-motion" aria-hidden="true"></div>
-      <svg class="route-lines" viewBox="0 0 360 1040" preserveAspectRatio="none" aria-hidden="true"><path d="M180 35 C40 130 55 245 185 280 S320 430 178 490 S38 650 185 700 S315 865 178 1005"/><circle id="routeBoat" cx="180" cy="35" r="10"/></svg>
-      <div id="islandList" class="island-list"><div class="loading">正在整理礁溪群島…</div></div>
+    <section class="destinations" id="destinations" aria-labelledby="destinationsTitle">
+      <header class="section-intro">
+        <span class="eyebrow">LOCAL EDIT</span>
+        <h2 id="destinationsTitle">五座島，25 個礁溪去處</h2>
+        <p>每一站都能查看資訊、加入行程，並從手機目前位置直接導航。</p>
+      </header>
+      <div id="islandList" class="destination-list" aria-live="polite">
+        <div class="loading">正在整理礁溪群島…</div>
+      </div>
     </section>
 
     <section class="planner" aria-labelledby="plannerTitle">
-      <div class="section-heading"><div><span class="eyebrow">TRIP PLANNER</span><h2 id="plannerTitle">一鍵排出今天路線</h2></div><span id="planCount">0 站</span></div>
-      <div class="plan-modes" id="planModes"></div>
-      <ol id="planList" class="plan-list"></ol>
-      <div class="planner-actions"><button class="button secondary" id="clearPlan">清空</button><button class="button primary" id="startPlan">開始逐站導航</button></div>
+      <div class="planner-copy">
+        <span class="eyebrow">TRIP PLANNER</span>
+        <h2 id="plannerTitle">把喜歡的站點<br>排成今天的路線</h2>
+        <p>從本店出發，依序開啟 Google Maps 導航。</p>
+      </div>
+      <div class="planner-panel">
+        <div class="planner-count"><strong id="planCount">0 站</strong><span>MY ROUTE</span></div>
+        <div class="plan-modes" id="planModes"></div>
+        <ol id="planList" class="plan-list"></ol>
+        <div class="planner-actions">
+          <button class="button ghost" id="clearPlan">清空</button>
+          <button class="button accent" id="startPlan">開始逐站導航</button>
+        </div>
+      </div>
     </section>
   </main>
 
   <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
   <aside class="place-sheet" id="placeSheet" aria-hidden="true" aria-labelledby="sheetTitle">
     <button class="sheet-close icon-button" id="sheetClose" aria-label="關閉">×</button>
-    <img id="sheetImage" alt="" loading="lazy" onerror="this.hidden=true" onload="this.hidden=false">
-    <div class="sheet-content"><span id="sheetCategory" class="eyebrow"></span><h2 id="sheetTitle"></h2><div id="sheetRating" class="rating"></div><p id="sheetSummary"></p><div id="sheetTags" class="tags"></div><dl id="sheetFacts"></dl><p id="sheetSource" class="source"></p></div>
-    <div class="sheet-actions"><button class="button secondary" id="addPlan">＋ 加入行程</button><button class="button secondary" id="navStore">本店出發</button><button class="button primary" id="navCurrent">目前位置導航</button></div>
+    <div class="sheet-media"><img id="sheetImage" alt="" loading="lazy" onerror="this.parentElement.hidden=true" onload="this.parentElement.hidden=false"></div>
+    <div class="sheet-content">
+      <span id="sheetCategory" class="eyebrow"></span>
+      <h2 id="sheetTitle"></h2>
+      <div id="sheetRating" class="rating"></div>
+      <p id="sheetSummary"></p>
+      <div id="sheetTags" class="tags"></div>
+      <dl id="sheetFacts"></dl>
+      <p id="sheetSource" class="source"></p>
+    </div>
+    <div class="sheet-actions">
+      <button class="button secondary" id="addPlan">＋ 加入行程</button>
+      <button class="button secondary" id="navStore">本店出發</button>
+      <button class="button primary" id="navCurrent">目前位置導航</button>
+    </div>
   </aside>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <footer>店家、營業、評分與交通資訊可能異動，出發前請以店家及 Google Maps 當下資訊為準。頁面不儲存手機定位。</footer>
+  <footer>店家、營業與交通資訊可能異動，出發前請以店家及 Google Maps 當下資訊為準。頁面不儲存手機定位。</footer>
 </body>
 </html>
